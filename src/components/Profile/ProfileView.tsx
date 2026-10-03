@@ -152,22 +152,22 @@ export const ProfileView: React.FC = () => {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 pb-20">
+    <div className="w-full mx-auto space-y-6 pb-16">
       
       {/* Date & Welcome Banner */}
-      <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 rounded-3xl p-6 sm:p-8 text-white shadow-lg relative overflow-hidden">
+      <div className="bg-gradient-to-r from-[#234E70] via-[#1C3E59] to-[#2B608A] rounded-3xl p-6 sm:p-8 text-white shadow-xs relative overflow-hidden">
         <div className="absolute right-0 top-0 translate-x-8 -translate-y-8 w-64 h-64 bg-white/10 rounded-full blur-2xl pointer-events-none" />
         
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-xs font-semibold text-white mb-3">
+            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-white/15 backdrop-blur-md text-xs font-semibold text-white mb-3">
               <Calendar className="w-3.5 h-3.5" />
               <span>{capitalizedToday}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
               Bonjour, {currentUser?.firstName || 'Lycéen'} ! 👋
             </h1>
-            <p className="mt-1 text-blue-100 text-sm max-w-xl">
+            <p className="mt-1 text-sky-100 text-xs sm:text-sm max-w-xl">
               {currentClass ? (
                 <>Bienvenue sur votre espace classe <span className="font-semibold text-white">{currentClass.name}</span> ({currentClass.schoolName}).</>
               ) : (
@@ -180,7 +180,7 @@ export const ProfileView: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('timetable')}
-              className="px-4 py-2.5 rounded-2xl bg-white text-blue-700 hover:bg-blue-50 font-bold text-xs sm:text-sm shadow-sm transition-transform active:scale-95 flex items-center"
+              className="px-4 py-2.5 rounded-2xl bg-white text-[#234E70] hover:bg-amber-50 font-bold text-xs sm:text-sm shadow-xs transition-transform active:scale-95 flex items-center"
             >
               <span>Voir l'emploi du temps</span>
               <ArrowRight className="w-4 h-4 ml-1.5" />
@@ -193,13 +193,13 @@ export const ProfileView: React.FC = () => {
         
         {/* Left Column: Profile Card & Customization */}
         <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm text-center">
+          <div className="bg-white dark:bg-[#1A2026] rounded-3xl p-6 border border-amber-900/10 dark:border-slate-800 shadow-xs text-center">
             
             {/* Avatar with distinctive BLUE RING for delegates */}
             <div className="relative inline-block mx-auto mb-4">
               <div
                 className={`w-28 h-28 rounded-full overflow-hidden mx-auto transition-all ${
-                  isLeader ? 'delegate-ring ring-4 ring-blue-500' : 'ring-2 ring-slate-200 dark:ring-slate-700'
+                  isLeader ? 'ring-4 ring-[#234E70] dark:ring-sky-400 ring-offset-4 ring-offset-[#FAF8F5] dark:ring-offset-[#1A2026]' : 'ring-2 ring-slate-200 dark:ring-slate-700'
                 }`}
               >
                 <img
@@ -212,7 +212,7 @@ export const ProfileView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowAvatarPicker(!showAvatarPicker)}
-                className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 shadow-md border-2 border-white dark:border-slate-900"
+                className="absolute bottom-0 right-0 p-2 rounded-full bg-[#234E70] text-white hover:bg-[#1b3e59] shadow-md border-2 border-white dark:border-[#1A2026]"
                 title="Changer ma photo de profil"
               >
                 <Camera className="w-4 h-4" />
