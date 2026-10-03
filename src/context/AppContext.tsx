@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, ActiveTab, UserRole } from '../types';
+import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, ActiveTab, UserRole, Homework, LessonSession } from '../types';
 import { firestoreService } from '../services/firestoreService';
 import { auth } from '../firebase';
 import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
-import { parseIcsContent } from '../utils/icsParser';
+import { parseFullIcsContent } from '../utils/icsParser';
 
 interface AppContextType {
   currentUser: User | null;
@@ -13,6 +13,9 @@ interface AppContextType {
   invitations: ClassInvitation[];
   members: User[];
   auditLogs: AuditLogItem[];
+  homework: Homework[];
+  lessonSessions: LessonSession[];
+  availableGroups: string[];
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
   themeMode: 'light' | 'dark';
@@ -48,8 +51,12 @@ interface AppContextType {
   updateCourse: (courseId: string, updates: Partial<Course>) => Promise<void>;
   deleteCourse: (courseId: string) => Promise<void>;
   updateDelegateNote: (courseId: string, noteText: string) => Promise<void>;
-  syncPronoteIcal: (customUrl?: string) => Promise<boolean>;
-  importIcsData: (icsString: string) => Promise<{ count: number }>;
+  syncPronoteIcal: (customUrl?: string) => Promise<{ success: boolean; message: string; count?: number }>;
+  importIcsData: (icsString: string) => Promise<{ count: number; homeworkCount: number; sessionCount: number }>;
+  
+  // Homework & Catchup
+  toggleHomeworkDone: (homeworkId: string) => Promise<void>;
+  updateHomeworkDelegate: (homeworkId: string, updates: { delegateNote?: string; estimatedTime?: string; links?: { title: string; url: string }[] }) => Promise<void>;
   
   // Personal Events
   addPersonalEvent: (event: Partial<PersonalEvent>) => Promise<void>;
@@ -112,6 +119,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isDelegate = currentUser?.role === 'DELEGATE';
   const isDeputy = currentUser?.role === 'DEPUTY';
   const isLeader = isDelegate || isDeputy;
+
+  const homework: Homework[] = currentClass?.homeworkList || [];
+  const lessonSessions: LessonSession[] = currentClass?.lessonSessions || [];
+  const availableGroups: string[] = currentClass?.availableGroups || [];
 
   const openModal = (modalName: string, data?: any) => {
     setActiveModal(modalName);
@@ -189,6 +200,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               themeColor: 'blue',
               hiddenCategories: [],
               hiddenCourseCategories: [],
+              completedHomeworkIds: [],
               createdAt: new Date().toISOString()
             };
             await firestoreService.setUser(createdUser);
@@ -224,16 +236,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [currentUser, refreshData]);
 
-  // Live polling every 12 seconds so all students stay synchronized
+  // Live polling every 15 seconds so all students stay synchronized
   useEffect(() => {
     if (!currentUser) return;
     const interval = setInterval(() => {
       refreshData();
-    }, 12000);
+    }, 15000);
     return () => clearInterval(interval);
   }, [currentUser, refreshData]);
 
-  // Auth: Direct Firebase Authentication (Popup or Google Credential)
+  // Auth: Direct Firebase Authentication
   const loginWithGoogle = async (credentialOrToken?: string) => {
     setIsLoading(true);
     try {
@@ -271,6 +283,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           themeColor: 'blue',
           hiddenCategories: [],
           hiddenCourseCategories: [],
+          completedHomeworkIds: [],
           createdAt: new Date().toISOString()
         };
         await firestoreService.setUser(createdUser);
@@ -313,8 +326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updatePrivateNotes = async (notes: string): Promise<string> => {
     if (!currentUser) return '';
-    const timestamp = 'Enregistré à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-    return timestamp;
+    return 'Enregistré à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   };
 
   const getPrivateNotes = async () => {
@@ -343,7 +355,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       academicYear: academicYear || '2026-2027',
       delegateIds: [currentUser.id],
       deputyIds: [],
-      createdAt: new Date().toISOString()
+      homeworkList: [],
+      lessonSessions: [],
+      availableGroups: []
     };
 
     await firestoreService.createClass(newClass, currentUser);
@@ -467,7 +481,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await refreshData();
   };
 
-  // Timetable (Direct Firestore)
+  // Timetable
   const addCourse = async (courseData: Partial<Course>) => {
     if (!currentUser?.classId) return;
     const courseId = 'c_' + Math.random().toString(36).substring(2, 9);
@@ -476,17 +490,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       classId: currentUser.classId,
       subject: courseData.subject || 'Cours',
       category: courseData.category || 'Tronc commun',
+      group: courseData.group,
       teacher: courseData.teacher || 'Professeur',
       room: courseData.room || 'Salle à définir',
       dayOfWeek: courseData.dayOfWeek || 1,
       startTime: courseData.startTime || '08:00',
       endTime: courseData.endTime || '09:00',
-      color: courseData.color || '#3b82f6',
+      color: courseData.color || '#234E70',
       isCancelled: courseData.isCancelled || false,
       cancelReason: courseData.cancelReason,
       isModified: courseData.isModified || false,
       modifiedReason: courseData.modifiedReason,
-      createdAt: new Date().toISOString()
+      statusType: courseData.statusType || 'normal',
+      statusLabel: courseData.statusLabel
     };
 
     await firestoreService.setCourse(currentUser.classId, course);
@@ -560,28 +576,190 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await refreshData();
   };
 
-  const syncPronoteIcal = async (customUrl?: string): Promise<boolean> => {
-    return false;
+  // Synchronisation Pronote automatique sécurisée via Worker Cloudflare /api/pronote
+  const syncPronoteIcal = async (customUrl?: string): Promise<{ success: boolean; message: string; count?: number }> => {
+    if (!currentClass || !currentUser) {
+      return { success: false, message: 'Aucune classe active' };
+    }
+
+    try {
+      let parsedCourses: Course[] = [];
+      let parsedHomework: Homework[] = [];
+      let parsedSessions: LessonSession[] = [];
+      let parsedGroups: string[] = [];
+
+      if (customUrl && customUrl.startsWith('http')) {
+        const res = await fetch(customUrl);
+        if (!res.ok) throw new Error(`Code HTTP ${res.status}`);
+        const icsText = await res.text();
+        if (!icsText || !icsText.includes('BEGIN:VCALENDAR')) {
+          throw new Error('Le flux retourné ne contient pas de données iCalendar valides.');
+        }
+        const localParsed = parseFullIcsContent(icsText, currentClass.id);
+        parsedCourses = localParsed.courses;
+        parsedHomework = localParsed.homework;
+        parsedSessions = localParsed.sessions;
+        parsedGroups = localParsed.availableGroups;
+      } else {
+        // Exige un jeton d'identité Firebase valide (Authorization: Bearer)
+        const idToken = await auth.currentUser?.getIdToken();
+        if (!idToken) {
+          throw new Error('Vous devez être authentifié avec votre compte Google pour synchroniser.');
+        }
+
+        const res = await fetch(`/api/pronote?classId=${encodeURIComponent(currentClass.id)}`, {
+          headers: {
+            'Authorization': `Bearer ${idToken}`,
+            'Accept': 'application/json'
+          }
+        });
+
+        const data: any = await res.json().catch(() => null);
+
+        if (!res.ok || !data) {
+          throw new Error(data?.error || `Erreur serveur (${res.status}) lors de la synchronisation.`);
+        }
+
+        if (!data.success) {
+          throw new Error(data.error || 'Erreur lors de la synchronisation.');
+        }
+
+        parsedCourses = data.courses || [];
+        parsedHomework = data.homework || [];
+        parsedSessions = data.sessions || [];
+        parsedGroups = data.availableGroups || [];
+      }
+
+      // Save sanitized courses to Firestore subcollection
+      await firestoreService.batchReplaceCourses(currentClass.id, parsedCourses);
+
+      // Formatted Paris time
+      const nowParis = new Intl.DateTimeFormat('fr-FR', {
+        timeZone: 'Europe/Paris',
+        hour: '2-digit',
+        minute: '2-digit'
+      }).format(new Date());
+
+      const syncTimestamp = `Aujourd'hui à ${nowParis}`;
+
+      // Update class doc with homework, sessions, and available groups
+      await firestoreService.updateClass(currentClass.id, {
+        homeworkList: parsedHomework,
+        lessonSessions: parsedSessions,
+        availableGroups: parsedGroups,
+        pronoteLastSynced: syncTimestamp,
+        pronoteSyncStatus: 'success'
+      });
+
+      await firestoreService.addAuditLog(currentClass.id, {
+        id: 'log_' + Date.now(),
+        classId: currentClass.id,
+        authorName: currentUser.name,
+        authorRole: currentUser.role === 'DELEGATE' ? 'Délégué(e) titulaire' : 'Suppléant(e)',
+        action: 'Synchronisation Pronote',
+        details: `${parsedCourses.length} cours, ${parsedHomework.length} devoirs et ${parsedSessions.length} séances synchronisés`,
+        timestamp: syncTimestamp
+      });
+
+      await refreshData();
+      return {
+        success: true,
+        message: `Synchronisation réussie : ${parsedCourses.length} cours, ${parsedHomework.length} devoirs et ${parsedSessions.length} séances mis à jour.`,
+        count: parsedCourses.length
+      };
+    } catch (err: any) {
+      console.error('Pronote sync failed:', err);
+      return {
+        success: false,
+        message: err.message || 'Impossible de joindre Pronote.'
+      };
+    }
   };
 
-  const importIcsData = async (icsString: string): Promise<{ count: number }> => {
+  const importIcsData = async (icsString: string): Promise<{ count: number; homeworkCount: number; sessionCount: number }> => {
     if (!currentClass || !currentUser) throw new Error('Aucune classe active');
-    const parsedCourses = parseIcsContent(icsString, currentClass.id);
-    await firestoreService.batchReplaceCourses(currentClass.id, parsedCourses);
+    const parsed = parseFullIcsContent(icsString, currentClass.id);
+
+    await firestoreService.batchReplaceCourses(currentClass.id, parsed.courses);
+
+    const nowParis = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Europe/Paris',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date());
+
+    const syncTimestamp = `Aujourd'hui à ${nowParis}`;
+
+    await firestoreService.updateClass(currentClass.id, {
+      homeworkList: parsed.homework,
+      lessonSessions: parsed.sessions,
+      availableGroups: parsed.availableGroups,
+      pronoteLastSynced: syncTimestamp,
+      pronoteSyncStatus: 'success'
+    });
+
     await firestoreService.addAuditLog(currentClass.id, {
       id: 'log_' + Date.now(),
       classId: currentClass.id,
       authorName: currentUser.name,
       authorRole: currentUser.role === 'DELEGATE' ? 'Délégué(e) titulaire' : 'Suppléant(e)',
       action: 'Import fichier .ics Pronote',
-      details: `${parsedCourses.length} cours importés depuis un fichier .ics Pronote`,
-      timestamp: 'Aujourd\'hui à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+      details: `${parsed.courses.length} cours, ${parsed.homework.length} devoirs, ${parsed.sessions.length} séances importés depuis un fichier .ics`,
+      timestamp: syncTimestamp
     });
+
     await refreshData();
-    return { count: parsedCourses.length };
+    return {
+      count: parsed.courses.length,
+      homeworkCount: parsed.homework.length,
+      sessionCount: parsed.sessions.length
+    };
   };
 
-  // Personal Events (Direct Firestore)
+  // Homework check/uncheck
+  const toggleHomeworkDone = async (homeworkId: string) => {
+    if (!currentUser) return;
+    const currentCompleted = currentUser.completedHomeworkIds || [];
+    const isDone = currentCompleted.includes(homeworkId);
+    const updated = isDone
+      ? currentCompleted.filter(id => id !== homeworkId)
+      : [...currentCompleted, homeworkId];
+
+    await firestoreService.updateUser(currentUser.id, {
+      completedHomeworkIds: updated
+    });
+    setCurrentUser({
+      ...currentUser,
+      completedHomeworkIds: updated
+    });
+  };
+
+  const updateHomeworkDelegate = async (
+    homeworkId: string,
+    updates: { delegateNote?: string; estimatedTime?: string; links?: { title: string; url: string }[] }
+  ) => {
+    if (!currentClass || !currentUser) return;
+    const currentList = currentClass.homeworkList || [];
+    const updatedList = currentList.map(hw => {
+      if (hw.id === homeworkId) {
+        return {
+          ...hw,
+          ...updates
+        };
+      }
+      return hw;
+    });
+
+    await firestoreService.updateClass(currentClass.id, {
+      homeworkList: updatedList
+    });
+    setCurrentClass({
+      ...currentClass,
+      homeworkList: updatedList
+    });
+  };
+
+  // Personal Events
   const addPersonalEvent = async (eventData: Partial<PersonalEvent>) => {
     if (!currentUser) return;
     const eventId = 'pe_' + Math.random().toString(36).substring(2, 9);
@@ -595,7 +773,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       startTime: eventData.startTime || '12:00',
       endTime: eventData.endTime || '13:00',
       category: eventData.category || 'Personnel',
-      color: eventData.color || '#3b82f6',
+      color: eventData.color || '#234E70',
       reminder: typeof eventData.reminder === 'string' ? eventData.reminder : 'none',
       createdAt: new Date().toISOString()
     };
@@ -615,7 +793,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await refreshData();
   };
 
-  // RGPD & Backup (Direct Firestore)
+  // RGPD & Backup
   const exportUserData = async () => {
     if (!currentUser) return;
     const personal = await firestoreService.getPersonalEvents(currentUser.id);
@@ -671,6 +849,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         invitations,
         members,
         auditLogs,
+        homework,
+        lessonSessions,
+        availableGroups,
         activeTab,
         setActiveTab,
         themeMode,
@@ -698,6 +879,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateDelegateNote,
         syncPronoteIcal,
         importIcsData,
+        toggleHomeworkDone,
+        updateHomeworkDelegate,
         addPersonalEvent,
         updatePersonalEvent,
         deletePersonalEvent,

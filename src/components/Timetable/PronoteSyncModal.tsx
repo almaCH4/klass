@@ -31,25 +31,23 @@ export const PronoteSyncModal: React.FC = () => {
 
   const handleSaveAndSync = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!icalUrl.trim()) return;
-
     setIsSyncing(true);
     setFeedback(null);
     try {
-      const ok = await syncPronoteIcal(icalUrl);
-      if (ok) {
+      const res = await syncPronoteIcal(icalUrl.trim() || undefined);
+      if (res.success) {
         setFeedback({
           type: 'success',
-          text: `Synchronisation réussie ! Les cours, salles et annulations de la classe sont à jour.`
+          text: res.message
         });
       } else {
         setFeedback({
           type: 'error',
-          text: 'Erreur lors de la lecture du flux iCal. Vérifiez le format du lien.'
+          text: res.message
         });
       }
-    } catch {
-      setFeedback({ type: 'error', text: 'Impossible de contacter le serveur Pronote.' });
+    } catch (err: any) {
+      setFeedback({ type: 'error', text: err.message || 'Impossible de contacter Pronote.' });
     } finally {
       setIsSyncing(false);
     }
@@ -68,7 +66,7 @@ export const PronoteSyncModal: React.FC = () => {
           if (result.count > 0) {
             setFeedback({
               type: 'success',
-              text: `${result.count} cours ont été importés avec succès depuis le fichier .ics !`
+              text: `${result.count} cours, ${result.homeworkCount} devoirs et ${result.sessionCount} séances ont été importés avec succès !`
             });
           } else {
             setFeedback({
@@ -145,54 +143,31 @@ export const PronoteSyncModal: React.FC = () => {
 
           {/* Form for leader */}
           {isLeader ? (
-            <form onSubmit={handleSaveAndSync} className="space-y-3">
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
-                  <span>Lien d'abonnement iCal Pronote (Délégué uniquement)</span>
-                  <span className="text-[10px] text-slate-400 flex items-center">
-                    <Lock className="w-2.5 h-2.5 mr-0.5 text-blue-500" />
-                    Chiffré & Masqué aux élèves
-                  </span>
-                </label>
-
-                <div className="relative">
-                  <input
-                    type={showFullUrl ? 'text' : 'password'}
-                    placeholder="webcal://pronote.ac-paris.fr/ical/... ou https://..."
-                    value={icalUrl}
-                    onChange={(e) => setIcalUrl(e.target.value)}
-                    className="w-full pl-3 pr-10 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowFullUrl(!showFullUrl)}
-                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
-                  >
-                    {showFullUrl ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+            <div className="space-y-4">
+              <div className="p-3.5 rounded-2xl bg-amber-50/70 dark:bg-slate-800/80 border border-amber-200/80 dark:border-slate-700 space-y-2">
+                <div className="flex items-center space-x-2 text-slate-800 dark:text-slate-200 font-bold">
+                  <Lock className="w-4 h-4 text-[#234E70] dark:text-sky-400" />
+                  <span>Synchronisation automatique sécurisée (/api/pronote)</span>
                 </div>
-
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Comment l'obtenir dans Pronote : Onglet <em>Emploi du temps</em> &gt; bouton <em>Paramètres / Icône Calendrier</em> &gt; <em>S'abonner au calendrier iCal</em>.
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Le lien d'abonnement iCal n'est jamais écrit dans le code ni exposé dans le navigateur. Il est conservé côté serveur dans le secret Cloudflare <code className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border text-[#234E70] dark:text-sky-400 font-mono font-bold">ICAL_URL</code> et mis en cache 15 minutes.
                 </p>
-              </div>
-
-              <div className="flex items-center space-x-2 pt-1">
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={handleSaveAndSync}
                   disabled={isSyncing}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-colors flex items-center justify-center space-x-2 shadow-sm"
+                  className="w-full py-2.5 px-4 rounded-xl bg-[#234E70] hover:bg-[#1b3e59] text-white font-bold transition-all flex items-center justify-center space-x-2 shadow-xs active:scale-95 disabled:opacity-60"
                 >
                   <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span>{isSyncing ? 'Synchronisation en cours...' : 'Synchroniser maintenant'}</span>
+                  <span>{isSyncing ? 'Synchronisation en cours...' : 'Synchroniser maintenant avec Pronote'}</span>
                 </button>
               </div>
-            </form>
+            </div>
           ) : (
-            <div className="p-3 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              <p className="font-semibold">Lien géré par les délégués</p>
+            <div className="p-3.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+              <p className="font-semibold">Synchronisation gérée par les délégués</p>
               <p className="text-[11px] mt-0.5 text-slate-500">
-                Le flux iCal est configuré de manière chiffrée par les délégués titulaires pour toute la classe.
+                La mise à jour de l'emploi du temps, des devoirs et des séances est effectuée automatiquement via la fonction Cloudflare sécurisée pour toute la classe.
               </p>
             </div>
           )}

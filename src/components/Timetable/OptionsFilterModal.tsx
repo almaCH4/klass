@@ -1,90 +1,108 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { X, Layers, Eye, EyeOff, Check } from 'lucide-react';
 
 export const OptionsFilterModal: React.FC = () => {
-  const { courses, currentUser, toggleHideCategory, closeModal } = useApp();
+  const { courses, currentClass, currentUser, toggleHideCategory, closeModal } = useApp();
 
-  // Find all unique categories from class courses
-  const allCategories = Array.from(
-    new Set(courses.map(c => c.category).filter((c): c is string => Boolean(c) && c !== 'Tronc commun'))
-  );
+  // Combine categories and groups extracted from courses and class info
+  const allGroupsAndOptions = useMemo(() => {
+    const set = new Set<string>();
+
+    if (currentClass?.availableGroups) {
+      currentClass.availableGroups.forEach(g => set.add(g));
+    }
+
+    courses.forEach(c => {
+      if (c.group) set.add(c.group);
+      if (c.category && c.category !== 'Tronc commun') set.add(c.category);
+    });
+
+    return Array.from(set).sort();
+  }, [courses, currentClass?.availableGroups]);
 
   const hiddenList = currentUser?.hiddenCourseCategories || [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+      <div className="bg-white dark:bg-[#1A2026] rounded-3xl max-w-md w-full border border-amber-900/10 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
         
-        <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="p-2 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 font-bold">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-amber-900/10 dark:border-slate-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5">
+            <div className="p-2 rounded-xl bg-[#234E70]/10 text-[#234E70] dark:bg-sky-950/50 dark:text-sky-400 font-bold">
               <Layers className="w-5 h-5" />
             </div>
             <div>
               <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                Mes options & spécialités
+                Mes options & groupes
               </h3>
-              <p className="text-xs text-slate-500">
-                Masquer les cours qui ne vous concernent pas
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Masquer les groupes et options qui ne vous concernent pas
               </p>
             </div>
           </div>
-          <button type="button" onClick={closeModal} className="p-1 rounded-xl text-slate-400 hover:text-slate-700">
+          <button
+            type="button"
+            onClick={closeModal}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-6 space-y-4 text-xs">
-          <p className="text-slate-600 dark:text-slate-300">
-            Cochez les options et spécialités que vous suivez. Les cours non cochés seront masqués de votre emploi du temps sans impacter les autres élèves.
+        {/* Content */}
+        <div className="p-6 space-y-4 text-xs overflow-y-auto flex-1">
+          <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+            Cochez les groupes et options que vous suivez (ex : LV2, spécialités, groupes de TP). Les cours non cochés seront masqués de votre emploi du temps et devoirs sans impacter vos camarades.
           </p>
 
           <div className="space-y-2">
-            {allCategories.length === 0 ? (
-              <p className="text-slate-400 text-center py-4">
-                Tous les cours actuels font partie du tronc commun.
-              </p>
+            {allGroupsAndOptions.length === 0 ? (
+              <div className="text-center py-6 text-slate-400">
+                <p className="font-semibold">Aucun groupe ou option détecté pour l'instant.</p>
+                <p className="text-[11px] mt-1">Tous les cours actuels font partie du tronc commun.</p>
+              </div>
             ) : (
-              allCategories.map((cat) => {
-                const isHidden = hiddenList.includes(cat);
+              allGroupsAndOptions.map((item) => {
+                const isHidden = hiddenList.includes(item);
                 const isFollowed = !isHidden;
 
                 return (
                   <button
-                    key={cat}
+                    key={item}
                     type="button"
-                    onClick={() => toggleHideCategory(cat)}
+                    onClick={() => toggleHideCategory(item)}
                     className={`w-full p-3 rounded-2xl border flex items-center justify-between transition-all ${
                       isFollowed
-                        ? 'bg-blue-50/60 dark:bg-blue-950/40 border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200'
-                        : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-500 opacity-60'
+                        ? 'bg-amber-50/60 dark:bg-sky-950/30 border-[#234E70]/30 dark:border-sky-800 text-slate-900 dark:text-white'
+                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 text-slate-400 opacity-60'
                     }`}
                   >
-                    <div className="flex items-center space-x-3">
+                    <div className="flex items-center space-x-3 min-w-0">
                       <div
-                        className={`w-5 h-5 rounded-lg flex items-center justify-center border transition-colors ${
+                        className={`w-5 h-5 rounded-lg flex items-center justify-center border transition-colors shrink-0 ${
                           isFollowed
-                            ? 'bg-blue-600 border-blue-600 text-white'
+                            ? 'bg-[#234E70] border-[#234E70] text-white'
                             : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800'
                         }`}
                       >
                         {isFollowed && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                       </div>
-                      <span className="font-bold text-sm">{cat}</span>
+                      <span className="font-bold text-xs sm:text-sm truncate">{item}</span>
                     </div>
 
-                    <span className="text-[11px] font-semibold flex items-center">
+                    <span className="text-[11px] font-semibold flex items-center shrink-0 ml-2">
                       {isFollowed ? (
-                        <>
-                          <Eye className="w-3.5 h-3.5 mr-1 text-blue-600 dark:text-blue-400" />
+                        <span className="text-[#234E70] dark:text-sky-400 flex items-center">
+                          <Eye className="w-3.5 h-3.5 mr-1" />
                           <span>Visible</span>
-                        </>
+                        </span>
                       ) : (
-                        <>
-                          <EyeOff className="w-3.5 h-3.5 mr-1 text-slate-400" />
+                        <span className="text-slate-400 flex items-center">
+                          <EyeOff className="w-3.5 h-3.5 mr-1" />
                           <span>Masqué</span>
-                        </>
+                        </span>
                       )}
                     </span>
                   </button>
@@ -94,13 +112,14 @@ export const OptionsFilterModal: React.FC = () => {
           </div>
         </div>
 
-        <div className="px-6 py-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 flex justify-end">
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-amber-900/10 dark:border-slate-800 bg-[#FAF8F5]/80 dark:bg-slate-900/60 flex justify-end">
           <button
             type="button"
             onClick={closeModal}
-            className="px-4 py-2 rounded-xl bg-blue-600 text-white text-xs font-bold hover:bg-blue-700"
+            className="px-4 py-2 rounded-xl bg-[#234E70] text-white text-xs font-bold hover:bg-[#1b3e59] shadow-xs transition-colors"
           >
-            Terminer
+            Terminé
           </button>
         </div>
 

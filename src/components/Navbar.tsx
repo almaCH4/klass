@@ -3,6 +3,8 @@ import { useApp } from '../context/AppContext';
 import { ActiveTab, UserRole } from '../types';
 import {
   Calendar,
+  BookOpen,
+  Sparkles,
   User as UserIcon,
   MoreVertical,
   Sun,
@@ -48,9 +50,11 @@ export const Navbar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Strict Phase 1 tabs only: Emploi du temps and Profil & Accueil
+  // Navigation Tabs: Emploi du temps, Devoirs, Rattrapage, Profil & Accueil
   const navItems: { id: ActiveTab; label: string; icon: React.ReactNode }[] = [
     { id: 'timetable', label: 'Emploi du temps', icon: <Calendar className="w-4 h-4 shrink-0" /> },
+    { id: 'homework', label: 'Devoirs', icon: <BookOpen className="w-4 h-4 shrink-0" /> },
+    { id: 'catchup', label: 'Rattrapage', icon: <Sparkles className="w-4 h-4 shrink-0" /> },
     { id: 'profile', label: 'Profil & Accueil', icon: <UserIcon className="w-4 h-4 shrink-0" /> },
   ];
 

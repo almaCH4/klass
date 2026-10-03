@@ -44,6 +44,7 @@ export const Timetable: React.FC = () => {
   });
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [syncFeedback, setSyncFeedback] = useState<{ message: string; success: boolean } | null>(null);
 
   // Compute dates for the displayed week (Lundi à Vendredi)
   const weekDays = useMemo(() => {
@@ -94,8 +95,11 @@ export const Timetable: React.FC = () => {
 
   const handleSyncClick = async () => {
     setIsSyncing(true);
-    await syncPronoteIcal();
+    setSyncFeedback(null);
+    const res = await syncPronoteIcal();
     setIsSyncing(false);
+    setSyncFeedback({ message: res.message, success: res.success });
+    setTimeout(() => setSyncFeedback(null), 5000);
   };
 
   const getDaySchedule = (dayOfWeek: number, isoDate: string) => {
@@ -149,7 +153,7 @@ export const Timetable: React.FC = () => {
 
             {/* Status Pills */}
             <div className="flex items-center flex-wrap gap-2 pt-1">
-              {/* Requirement 5: Le statut "Pronote synchro : Connecté" ne doit apparaître que si un emploi du temps a réellement été importé ; sinon affiche "Pas encore importé" */}
+              {/* Pronote sync status pill */}
               {hasImportedSchedule ? (
                 <button
                   type="button"
@@ -174,6 +178,33 @@ export const Timetable: React.FC = () => {
                 </button>
               )}
 
+              {/* Requirement 3: Le délégué voit un bouton « Synchroniser maintenant » et « Dernière synchro à HH:MM » */}
+              {isLeader && (
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={handleSyncClick}
+                    disabled={isSyncing}
+                    className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold bg-[#234E70] text-white hover:bg-[#1b3e59] shadow-xs active:scale-95 disabled:opacity-60 transition-all"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    {isSyncing ? 'Synchronisation...' : 'Synchroniser maintenant'}
+                  </button>
+
+                  {currentClass?.pronoteLastSynced ? (
+                    <span className="text-xs text-slate-600 dark:text-slate-300 font-semibold bg-slate-100 dark:bg-slate-800/80 px-2.5 py-0.5 rounded-full">
+                      {currentClass.pronoteLastSynced.includes('à')
+                        ? `Dernière synchro à ${currentClass.pronoteLastSynced.split('à')[1]?.trim() || ''}`
+                        : `Dernière synchro : ${currentClass.pronoteLastSynced}`}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-400 font-medium">
+                      Pas encore synchronisé
+                    </span>
+                  )}
+                </div>
+              )}
+
               {/* Options filter button */}
               <button
                 type="button"
@@ -189,6 +220,19 @@ export const Timetable: React.FC = () => {
                 )}
               </button>
             </div>
+
+            {/* Sync feedback notification */}
+            {syncFeedback && (
+              <div
+                className={`mt-2 p-3 rounded-2xl text-xs flex items-center space-x-2 border transition-all animate-in fade-in duration-200 ${
+                  syncFeedback.success
+                    ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                    : 'bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border-rose-200 dark:border-rose-800'
+                }`}
+              >
+                <span className="font-semibold">{syncFeedback.message}</span>
+              </div>
+            )}
           </div>
 
           {/* Navigation Controls & Action Buttons */}

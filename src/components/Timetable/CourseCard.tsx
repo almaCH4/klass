@@ -51,8 +51,35 @@ export const CourseCard: React.FC<CourseCardProps> = ({ course, onEditNote, onEd
               {course.subject}
             </h4>
 
-            {course.category && (
-              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            {/* Status Badges */}
+            {course.statusLabel && (
+              <span
+                className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full text-white shadow-2xs ${
+                  course.statusType === 'cancelled'
+                    ? 'bg-[#991B1B]'
+                    : course.statusType === 'room_change'
+                    ? 'bg-orange-600'
+                    : course.statusType === 'replacement'
+                    ? 'bg-sky-600'
+                    : course.statusType === 'exam'
+                    ? 'bg-rose-700'
+                    : course.statusType === 'exceptional'
+                    ? 'bg-purple-600'
+                    : 'bg-amber-600'
+                }`}
+              >
+                {course.statusLabel}
+              </span>
+            )}
+
+            {course.group && (
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                {course.group}
+              </span>
+            )}
+
+            {course.category && course.category !== course.group && (
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 dark:bg-slate-800/80 dark:text-slate-300">
                 {course.category}
               </span>
             )}

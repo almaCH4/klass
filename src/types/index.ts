@@ -15,6 +15,7 @@ export interface User {
   themeColor: 'blue' | 'purple' | 'emerald' | 'amber' | 'rose' | 'cyan';
   hiddenCategories?: string[]; // Options or groups hidden by student
   hiddenCourseCategories?: string[];
+  completedHomeworkIds?: string[]; // Personal "done" list for homework
   privateNotes?: string;
   privateNotesLastSaved?: string;
   createdAt?: string;
@@ -31,14 +32,27 @@ export interface ClassInfo {
   pronoteLastSynced?: string;
   pronoteSyncStatus?: 'idle' | 'syncing' | 'success' | 'error';
   pronoteSyncError?: string;
+  homeworkList?: Homework[];
+  lessonSessions?: LessonSession[];
+  availableGroups?: string[];
   createdAt?: string;
 }
+
+export type CourseStatusType =
+  | 'normal'
+  | 'cancelled'
+  | 'modified'
+  | 'room_change'
+  | 'replacement'
+  | 'exceptional'
+  | 'exam';
 
 export interface Course {
   id: string;
   classId: string;
   subject: string;
   category?: string; // e.g. "Tronc commun", "Spé Maths", "Spé SVT", "Spé NSI", "Allemand LV2", "Groupe A"
+  group?: string;    // e.g. "[2-ESP B3]"
   teacher: string;
   room: string;
   originalRoom?: string;
@@ -50,6 +64,10 @@ export interface Course {
   cancelReason?: string;
   isModified?: boolean;
   modifiedReason?: string;
+  statusType?: CourseStatusType;
+  statusLabel?: string; // "Cours annulé", "Cours modifié", "Changement de salle", "Remplacement", "Exceptionnel", "Examen"
+  lessonContent?: string;
+  documents?: string[];
   delegateNote?: {
     authorName: string;
     authorRole: string;
@@ -57,6 +75,35 @@ export interface Course {
     updatedAt: string;
   };
   createdAt?: string;
+}
+
+export interface Homework {
+  id: string;
+  classId: string;
+  subject: string;
+  givenDate?: string;     // JJ/MM/AAAA
+  dueDate: string;        // JJ/MM/AAAA or YYYY-MM-DD
+  dueDateIso?: string;    // YYYY-MM-DD for sorting
+  description: string;
+  documents?: string[];   // attached document names (displayed as "document sur Pronote")
+  group?: string;         // e.g. "[2-ESP B3]"
+  delegateNote?: string;
+  estimatedTime?: string; // e.g. "20 min"
+  links?: { title: string; url: string }[];
+  createdAt?: string;
+}
+
+export interface LessonSession {
+  id: string;
+  classId: string;
+  subject: string;
+  date: string;           // JJ/MM/AAAA or YYYY-MM-DD
+  dateIso?: string;       // YYYY-MM-DD for sorting
+  title?: string;
+  content: string;
+  documents?: string[];
+  group?: string;
+  teacher?: string;
 }
 
 export interface PersonalEvent {

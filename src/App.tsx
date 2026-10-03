@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { Timetable } from './components/Timetable/Timetable';
+import { HomeworkView } from './components/Homework/HomeworkView';
+import { CatchupView } from './components/Catchup/CatchupView';
 import { ProfileView } from './components/Profile/ProfileView';
 import { ModalManager } from './components/ModalManager';
 import {
@@ -78,6 +80,8 @@ const AppContent: React.FC = () => {
       {/* Main Container centered at ~1100px max-width */}
       <main className="flex-1 max-w-[1100px] w-full mx-auto px-4 sm:px-6 pt-6 pb-12">
         {activeTab === 'timetable' && <Timetable />}
+        {activeTab === 'homework' && <HomeworkView />}
+        {activeTab === 'catchup' && <CatchupView />}
         {activeTab === 'profile' && <ProfileView />}
       </main>
 
