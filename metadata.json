@@ -1,0 +1,6 @@
+{
+  "name": "Klass - Espace Classe Lycée 24h/24",
+  "description": "Espace de classe connecté accessible 24h/24 : emploi du temps synchronisé Pronote, devoirs, événements personnels et communication délégués.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

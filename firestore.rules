@@ -1,0 +1,163 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isClassMember(classId) {
+      return isVerified() && getUserData().classId == classId;
+    }
+
+    function getClassData(classId) {
+      return get(/databases/$(database)/documents/classes/$(classId)).data;
+    }
+
+    function isClassLeader(classId) {
+      return isVerified() && (
+        (request.auth.uid in getClassData(classId).delegateIds) ||
+        (request.auth.uid in getClassData(classId).deputyIds)
+      );
+    }
+
+    // Entity Validations
+    function isValidUser(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.email is string && data.email.size() <= 128 &&
+             data.name is string && data.name.size() <= 100 &&
+             data.role in ['STUDENT', 'DELEGATE', 'DEPUTY'] &&
+             (!('classId' in data) || (data.classId is string && data.classId.size() <= 128));
+    }
+
+    function isValidClass(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.name is string && data.name.size() <= 80 &&
+             data.schoolName is string && data.schoolName.size() <= 100 &&
+             data.delegateIds is list && data.delegateIds.size() <= 10 &&
+             data.deputyIds is list && data.deputyIds.size() <= 10;
+    }
+
+    function isValidCourse(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.classId is string && data.classId.size() <= 128 &&
+             data.subject is string && data.subject.size() <= 100 &&
+             data.dayOfWeek is number && data.dayOfWeek >= 0 && data.dayOfWeek <= 6 &&
+             data.startTime is string && data.startTime.size() <= 10 &&
+             data.endTime is string && data.endTime.size() <= 10;
+    }
+
+    function isValidPersonalEvent(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.userId == request.auth.uid &&
+             data.title is string && data.title.size() <= 100 &&
+             data.date is string && data.date.size() <= 20 &&
+             data.startTime is string && data.startTime.size() <= 10 &&
+             data.endTime is string && data.endTime.size() <= 10;
+    }
+
+    function isValidInvitation(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.classId is string && data.classId.size() <= 128 &&
+             data.code is string && data.code.size() <= 64 &&
+             data.targetRole in ['STUDENT', 'DEPUTY'];
+    }
+
+    function isValidAuditLog(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.classId is string && data.classId.size() <= 128 &&
+             data.action is string && data.action.size() <= 100 &&
+             data.details is string && data.details.size() <= 500;
+    }
+
+    // 1. Users Collection
+    match /users/{userId} {
+      allow get: if isVerified() && (
+        request.auth.uid == userId ||
+        (getUserData().classId != null && getUserData().classId == resource.data.classId)
+      );
+      allow list: if isVerified() && resource.data.classId == getUserData().classId;
+      allow create: if isVerified() && request.auth.uid == userId && isValidUser(incoming());
+      allow update: if isVerified() && isValidUser(incoming()) &&
+                    incoming().id == existing().id &&
+                    incoming().email == existing().email && (
+                      request.auth.uid == userId ||
+                      (existing().classId != null && isClassLeader(existing().classId))
+                    );
+      allow delete: if isVerified() && request.auth.uid == userId;
+
+      // Personal Events subcollection
+      match /personalEvents/{eventId} {
+        allow read, write: if isVerified() && request.auth.uid == userId;
+      }
+    }
+
+    // 2. Classes Collection
+    match /classes/{classId} {
+      allow get: if isVerified() && (isClassMember(classId) || exists(/databases/$(database)/documents/classes/$(classId)));
+      allow create: if isVerified() && isValidId(classId) && isValidClass(incoming()) &&
+                    request.auth.uid in incoming().delegateIds;
+      allow update: if isVerified() && isValidId(classId) && isClassLeader(classId) &&
+                    isValidClass(incoming()) && incoming().id == existing().id;
+      allow delete: if false;
+
+      // Courses subcollection
+      match /courses/{courseId} {
+        allow read: if isClassMember(classId);
+        allow create: if isClassLeader(classId) && isValidId(courseId) && isValidCourse(incoming()) &&
+                      incoming().classId == classId;
+        allow update: if isClassLeader(classId) && isValidId(courseId) && isValidCourse(incoming()) &&
+                      incoming().classId == existing().classId;
+        allow delete: if isClassLeader(classId);
+      }
+
+      // Invitations subcollection
+      match /invitations/{invitationId} {
+        allow get: if isVerified();
+        allow list: if isClassLeader(classId);
+        allow create: if isClassLeader(classId) && isValidId(invitationId) && isValidInvitation(incoming()) &&
+                      incoming().classId == classId;
+        allow update: if isClassLeader(classId) || (
+          isVerified() && incoming().diff(existing()).affectedKeys().hasOnly(['isUsed', 'usedBy'])
+        );
+        allow delete: if isClassLeader(classId);
+      }
+
+      // Audit Logs subcollection
+      match /auditLogs/{logId} {
+        allow read: if isClassMember(classId);
+        allow create: if isClassLeader(classId) && isValidId(logId) && isValidAuditLog(incoming()) &&
+                      incoming().classId == classId;
+        allow update, delete: if false; // Audit logs are immutable
+      }
+    }
+
+  }
+}

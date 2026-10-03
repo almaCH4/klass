@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Utilisateur de Klass authentifié par jeton Google officiel",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "firstName": { "type": "string", "maxLength": 60 },
+        "lastName": { "type": "string", "maxLength": 60 },
+        "avatar": { "type": "string", "maxLength": 512 },
+        "role": { "type": "string", "enum": ["STUDENT", "DELEGATE", "DEPUTY"] },
+        "classId": { "type": "string", "maxLength": 128 },
+        "hiddenCategories": { "type": "array" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "email", "name", "role"]
+    },
+    "Class": {
+      "title": "Class",
+      "description": "Espace de classe géré par les délégués",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 80 },
+        "schoolName": { "type": "string", "maxLength": 100 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "delegateIds": { "type": "array" },
+        "deputyIds": { "type": "array" },
+        "pronoteIcalUrl": { "type": "string", "maxLength": 2048 },
+        "pronoteLastSynced": { "type": "string", "maxLength": 100 },
+        "pronoteSyncStatus": { "type": "string", "enum": ["idle", "syncing", "success", "error"] },
+        "pronoteSyncError": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "schoolName"]
+    },
+    "Course": {
+      "title": "Course",
+      "description": "Cours de l'emploi du temps partagé de la classe",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "subject": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 60 },
+        "teacher": { "type": "string", "maxLength": 100 },
+        "room": { "type": "string", "maxLength": 50 },
+        "dayOfWeek": { "type": "number" },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "color": { "type": "string", "maxLength": 30 },
+        "isCancelled": { "type": "boolean" },
+        "cancelReason": { "type": "string", "maxLength": 250 },
+        "isModified": { "type": "boolean" },
+        "modifiedReason": { "type": "string", "maxLength": 250 },
+        "delegateNote": { "type": "object" },
+        "isCustom": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "classId", "subject", "dayOfWeek", "startTime", "endTime"]
+    },
+    "PersonalEvent": {
+      "title": "PersonalEvent",
+      "description": "Événement personnel propre à chaque élève",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "date": { "type": "string", "maxLength": 20 },
+        "startTime": { "type": "string", "maxLength": 10 },
+        "endTime": { "type": "string", "maxLength": 10 },
+        "category": { "type": "string", "maxLength": 50 },
+        "color": { "type": "string", "maxLength": 30 },
+        "reminder": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "title", "date", "startTime", "endTime"]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "Code d'invitation généré par un délégué",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "code": { "type": "string", "maxLength": 64 },
+        "targetRole": { "type": "string", "enum": ["STUDENT", "DEPUTY"] },
+        "studentEmail": { "type": "string", "format": "email", "maxLength": 128 },
+        "studentName": { "type": "string", "maxLength": 100 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "expiresAt": { "type": "string", "maxLength": 50 },
+        "isUsed": { "type": "boolean" },
+        "usedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "classId", "code", "targetRole"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Journal d'audit horodaté des actions délégués",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "authorName": { "type": "string", "maxLength": 100 },
+        "authorRole": { "type": "string", "maxLength": 60 },
+        "action": { "type": "string", "maxLength": 100 },
+        "details": { "type": "string", "maxLength": 500 },
+        "timestamp": { "type": "string", "maxLength": 80 }
+      },
+      "required": ["id", "classId", "action", "details"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Profils des utilisateurs certifiés par jeton Google"
+    },
+    "/classes/{classId}": {
+      "schema": { "$ref": "#/entities/Class" },
+      "description": "Espaces de classe"
+    },
+    "/classes/{classId}/courses/{courseId}": {
+      "schema": { "$ref": "#/entities/Course" },
+      "description": "Emploi du temps et cours de la classe"
+    },
+    "/classes/{classId}/invitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/Invitation" },
+      "description": "Invitations sécurisées de classe"
+    },
+    "/classes/{classId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Journal d'audit de la classe"
+    },
+    "/users/{userId}/personalEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/PersonalEvent" },
+      "description": "Événements personnels privés de chaque élève"
+    }
+  }
+}
