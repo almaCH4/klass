@@ -4,6 +4,7 @@ import { Navbar } from './components/Navbar';
 import { Timetable } from './components/Timetable/Timetable';
 import { HomeworkView } from './components/Homework/HomeworkView';
 import { CatchupView } from './components/Catchup/CatchupView';
+import { ClassChatView } from './components/Chat/ClassChatView';
 import { ProfileView } from './components/Profile/ProfileView';
 import { ModalManager } from './components/ModalManager';
 import {
@@ -81,6 +82,7 @@ const AppContent: React.FC = () => {
       <main className="flex-1 max-w-[1100px] w-full mx-auto px-4 sm:px-6 pt-6 pb-12">
         {activeTab === 'timetable' && <Timetable />}
         {activeTab === 'homework' && <HomeworkView />}
+        {activeTab === 'chat' && <ClassChatView />}
         {activeTab === 'catchup' && <CatchupView />}
         {activeTab === 'profile' && <ProfileView />}
       </main>

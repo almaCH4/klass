@@ -8,8 +8,6 @@ import {
   Shield,
   Download,
   Trash2,
-  Eye,
-  EyeOff,
   Palette,
   Clock,
   Cake,
@@ -57,7 +55,6 @@ export const ProfileView: React.FC = () => {
   const [firstName, setFirstName] = useState(currentUser?.firstName || '');
   const [lastName, setLastName] = useState(currentUser?.lastName || '');
   const [birthday, setBirthday] = useState(currentUser?.birthday || '');
-  const [showBirthday, setShowBirthday] = useState(currentUser?.showBirthdayToClass ?? true);
   const [selectedTheme, setSelectedTheme] = useState(currentUser?.themeColor || 'blue');
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   const [profileSavedFeedback, setProfileSavedFeedback] = useState(false);
@@ -82,7 +79,6 @@ export const ProfileView: React.FC = () => {
       setFirstName(currentUser.firstName || '');
       setLastName(currentUser.lastName || '');
       setBirthday(currentUser.birthday || '');
-      setShowBirthday(currentUser.showBirthdayToClass);
       setSelectedTheme(currentUser.themeColor || 'blue');
     }
   }, [currentUser]);
@@ -126,7 +122,7 @@ export const ProfileView: React.FC = () => {
       lastName,
       name: `${firstName} ${lastName}`.trim(),
       birthday,
-      showBirthdayToClass: showBirthday,
+      showBirthdayToClass: true,
       themeColor: selectedTheme
     });
     setProfileSavedFeedback(true);
@@ -323,19 +319,9 @@ export const ProfileView: React.FC = () => {
                 onChange={(e) => setBirthday(e.target.value)}
                 className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
-
-              <label className="mt-2.5 flex items-center space-x-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showBirthday}
-                  onChange={(e) => setShowBirthday(e.target.checked)}
-                  className="rounded text-blue-600 focus:ring-blue-500"
-                />
-                <span className="flex items-center">
-                  {showBirthday ? <Eye className="w-3 h-3 mr-1 text-emerald-500" /> : <EyeOff className="w-3 h-3 mr-1 text-slate-400" />}
-                  {showBirthday ? 'Afficher mon anniversaire à la classe' : 'Garder mon anniversaire secret'}
-                </span>
-              </label>
+              <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                🎂 Fêté par le bot de classe le matin (seuls le jour et le mois sont affichés, jamais l'année).
+              </p>
             </div>
 
             {/* Theme color preference */}

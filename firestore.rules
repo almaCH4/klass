@@ -48,6 +48,11 @@ service cloud.firestore {
       );
     }
 
+    function isNotMuted(classId) {
+      return !('mutedUserIds' in getClassData(classId)) ||
+             !(request.auth.uid in getClassData(classId).mutedUserIds);
+    }
+
     // Entity Validations
     function isValidUser(data) {
       return data.id is string && data.id.size() <= 128 &&
@@ -62,7 +67,20 @@ service cloud.firestore {
              data.name is string && data.name.size() <= 80 &&
              data.schoolName is string && data.schoolName.size() <= 100 &&
              data.delegateIds is list && data.delegateIds.size() <= 10 &&
-             data.deputyIds is list && data.deputyIds.size() <= 10;
+             data.deputyIds is list && data.deputyIds.size() <= 10 &&
+             (!('chatDescription' in data) || (data.chatDescription is string && data.chatDescription.size() <= 1000)) &&
+             (!('pinnedMessageId' in data) || (data.pinnedMessageId is string && data.pinnedMessageId.size() <= 128)) &&
+             (!('badWordsList' in data) || (data.badWordsList is list && data.badWordsList.size() <= 100)) &&
+             (!('mutedUserIds' in data) || (data.mutedUserIds is list && data.mutedUserIds.size() <= 100));
+    }
+
+    function isValidChatMessage(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.classId is string && data.classId.size() <= 128 &&
+             data.senderId == request.auth.uid &&
+             data.senderName is string && data.senderName.size() <= 100 &&
+             data.text is string && data.text.size() <= 2200 &&
+             data.timestampMs is number;
     }
 
     function isValidCourse(data) {
@@ -156,6 +174,29 @@ service cloud.firestore {
         allow create: if isClassLeader(classId) && isValidId(logId) && isValidAuditLog(incoming()) &&
                       incoming().classId == classId;
         allow update, delete: if false; // Audit logs are immutable
+      }
+
+      // Chat Messages subcollection (Groupe de classe)
+      match /messages/{messageId} {
+        allow read: if isClassMember(classId);
+
+        // Seuls les membres non en sourdine peuvent créer un message
+        // Si type == 'poll', seuls les délégués peuvent le créer
+        allow create: if isClassMember(classId) && isNotMuted(classId) &&
+                      isValidId(messageId) && isValidChatMessage(incoming()) &&
+                      incoming().classId == classId &&
+                      (!('type' in incoming()) || incoming().type != 'poll' || isClassLeader(classId));
+
+        // Mise à jour : délégués OU membres pour voter / réagir / signaler
+        allow update: if isClassMember(classId) && isValidId(messageId) && (
+          isClassLeader(classId) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['reactions']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['poll']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['reports'])
+        );
+
+        // Seuls les délégués suppriment un message
+        allow delete: if isClassLeader(classId);
       }
     }
 

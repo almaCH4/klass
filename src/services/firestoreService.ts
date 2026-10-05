@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../utils/firestoreError';
-import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, UserRole } from '../types';
+import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, UserRole, ChatMessage, ChatPoll } from '../types';
 
 export class FirestoreService {
   // -------------------------------------------------------------
@@ -409,6 +409,36 @@ export class FirestoreService {
     });
 
     return restoredCourses.length;
+  }
+
+  // -------------------------------------------------------------
+  // CHAT MESSAGES
+  // -------------------------------------------------------------
+  async sendChatMessage(classId: string, message: ChatMessage): Promise<void> {
+    const path = `classes/${classId}/messages/${message.id}`;
+    try {
+      await setDoc(doc(db, 'classes', classId, 'messages', message.id), message);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, path);
+    }
+  }
+
+  async updateChatMessage(classId: string, messageId: string, updates: Partial<ChatMessage>): Promise<void> {
+    const path = `classes/${classId}/messages/${messageId}`;
+    try {
+      await updateDoc(doc(db, 'classes', classId, 'messages', messageId), updates);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  }
+
+  async deleteChatMessage(classId: string, messageId: string): Promise<void> {
+    const path = `classes/${classId}/messages/${messageId}`;
+    try {
+      await deleteDoc(doc(db, 'classes', classId, 'messages', messageId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
   }
 }
 

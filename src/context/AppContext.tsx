@@ -37,6 +37,7 @@ interface AppContextType {
   
   // Class Management
   createClass: (name: string, schoolName: string, academicYear?: string) => Promise<void>;
+  updateClassInfo: (updates: Partial<ClassInfo>) => Promise<void>;
   joinClassWithInvite: (token: string) => Promise<{ success: boolean; message: string }>;
   promoteMember: (userId: string, newRole: UserRole) => Promise<{ success: boolean; message: string }>;
   removeMember: (userId: string) => Promise<{ success: boolean; message: string }>;
@@ -379,6 +380,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     closeModal();
     await refreshData();
+  };
+
+  const updateClassInfo = async (updates: Partial<ClassInfo>) => {
+    if (!currentClass) return;
+    await firestoreService.updateClass(currentClass.id, updates);
+    setCurrentClass(prev => prev ? { ...prev, ...updates } : null);
   };
 
   const joinClassWithInvite = async (token: string) => {
@@ -867,6 +874,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getPrivateNotes,
         toggleHideCategory,
         createClass,
+        updateClassInfo,
         joinClassWithInvite,
         promoteMember,
         removeMember,

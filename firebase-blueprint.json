@@ -114,6 +114,31 @@
         "timestamp": { "type": "string", "maxLength": 80 }
       },
       "required": ["id", "classId", "action", "details"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Message ou sondage du groupe de classe",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 128 },
+        "senderId": { "type": "string", "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 100 },
+        "senderAvatar": { "type": "string", "maxLength": 512 },
+        "senderRole": { "type": "string", "enum": ["STUDENT", "DELEGATE", "DEPUTY"] },
+        "text": { "type": "string", "maxLength": 2200 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "timestampMs": { "type": "number" },
+        "type": { "type": "string", "enum": ["text", "poll"] },
+        "poll": { "type": "object" },
+        "replyTo": { "type": "object" },
+        "reactions": { "type": "object" },
+        "isPinned": { "type": "boolean" },
+        "pinnedAt": { "type": "string", "maxLength": 50 },
+        "pinnedBy": { "type": "string", "maxLength": 100 },
+        "reports": { "type": "array" }
+      },
+      "required": ["id", "classId", "senderId", "senderName", "text", "timestampMs"]
     }
   },
   "firestore": {
@@ -128,6 +153,10 @@
     "/classes/{classId}/courses/{courseId}": {
       "schema": { "$ref": "#/entities/Course" },
       "description": "Emploi du temps et cours de la classe"
+    },
+    "/classes/{classId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages et sondages du chat de groupe de classe"
     },
     "/classes/{classId}/invitations/{invitationId}": {
       "schema": { "$ref": "#/entities/Invitation" },

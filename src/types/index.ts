@@ -35,6 +35,10 @@ export interface ClassInfo {
   homeworkList?: Homework[];
   lessonSessions?: LessonSession[];
   availableGroups?: string[];
+  chatDescription?: string;
+  pinnedMessageId?: string;
+  badWordsList?: string[];
+  mutedUserIds?: string[];
   createdAt?: string;
 }
 
@@ -143,6 +147,46 @@ export interface AuditLogItem {
   action: string;
   details: string;
   timestamp: string;
+}
+
+export interface ChatPollOption {
+  id: string;
+  text: string;
+  voterIds: string[];
+}
+
+export interface ChatPoll {
+  question: string;
+  options: ChatPollOption[];
+  isMultipleChoice: boolean;
+  createdAt: string;
+}
+
+export interface ChatMessageReplyTo {
+  id: string;
+  senderName: string;
+  text: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  classId: string;
+  senderId: string;
+  senderName: string;
+  senderAvatar?: string;
+  senderRole: UserRole;
+  text: string;
+  createdAt: string;
+  timestampMs: number;
+  type?: 'text' | 'poll';
+  poll?: ChatPoll;
+  replyTo?: ChatMessageReplyTo;
+  reactions?: Record<string, string[]>; // emoji -> array of userIds
+  isPinned?: boolean;
+  pinnedAt?: string;
+  pinnedBy?: string;
+  reports?: { userId: string; reason: string; timestamp: string }[];
+  isDeleted?: boolean;
 }
 
 export type ActiveTab = 'timetable' | 'homework' | 'exams' | 'catchup' | 'chat' | 'messages' | 'profile';
