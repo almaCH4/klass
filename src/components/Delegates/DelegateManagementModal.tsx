@@ -39,9 +39,10 @@ export const DelegateManagementModal: React.FC = () => {
 
   const handleCreateInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!emailInput) return;
+    const normalizedEmail = emailInput.trim().toLowerCase();
+    if (!normalizedEmail) return;
 
-    const res = await createInvitation(emailInput, roleTarget);
+    const res = await createInvitation(normalizedEmail, roleTarget);
     if (res.success) {
       setFeedback({ type: 'success', text: res.message });
       setEmailInput('');

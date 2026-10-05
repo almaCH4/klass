@@ -18,6 +18,7 @@ export interface User {
   completedHomeworkIds?: string[]; // Personal "done" list for homework
   privateNotes?: string;
   privateNotesLastSaved?: string;
+  joinedWithInvitationId?: string;
   createdAt?: string;
 }
 

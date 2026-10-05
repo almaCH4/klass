@@ -239,27 +239,43 @@ export class FirestoreService {
         throw new Error('Cette invitation a été révoquée.');
       }
 
-      const classObj = await this.getClass(classId);
-      if (!classObj) throw new Error('Classe introuvable.');
-
-      // Mark invitation as accepted
-      await updateDoc(invRef, {
-        status: 'ACCEPTED',
-        acceptedAt: new Date().toISOString()
-      });
+      // Compare emails strictly in lowercase
+      if (invitation.email) {
+        const invEmail = invitation.email.trim().toLowerCase();
+        const userEmail = (user.email || '').trim().toLowerCase();
+        if (invEmail !== userEmail) {
+          throw new Error(
+            `Cette invitation est réservée à l'adresse e-mail ${invEmail}. Votre compte Google actuel est ${userEmail}.`
+          );
+        }
+      }
 
       // Update user role and classId
       const targetRole: UserRole = invitation.roleTarget || 'STUDENT';
       const updatedUser: User = {
         ...user,
         classId,
-        role: targetRole
+        role: targetRole,
+        joinedWithInvitationId: invitationId
       };
 
-      await this.updateUser(user.id, {
-        classId,
-        role: targetRole
+      // Atomic batch: mark invitation used and set user classId with joinedWithInvitationId
+      const batch = writeBatch(db);
+      batch.update(invRef, {
+        status: 'ACCEPTED',
+        isUsed: true,
+        usedBy: user.id,
+        acceptedAt: new Date().toISOString()
       });
+      batch.update(doc(db, 'users', user.id), {
+        classId,
+        role: targetRole,
+        joinedWithInvitationId: invitationId
+      });
+      await batch.commit();
+
+      const classObj = await this.getClass(classId);
+      if (!classObj) throw new Error('Classe introuvable.');
 
       // Add audit log
       await this.addAuditLog(classId, {

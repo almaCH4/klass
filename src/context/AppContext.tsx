@@ -148,22 +148,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       if (currentUser.classId) {
-        const [classDoc, coursesDocs, membersDocs, logsDocs, personalDocs] = await Promise.all([
+        const isLeaderUser = currentUser.role === 'DELEGATE' || currentUser.role === 'DEPUTY';
+        const [classDoc, coursesDocs, logsDocs, personalDocs] = await Promise.all([
           firestoreService.getClass(currentUser.classId),
           firestoreService.getCourses(currentUser.classId),
-          firestoreService.getClassMembers(currentUser.classId),
           firestoreService.getAuditLogs(currentUser.classId),
           firestoreService.getPersonalEvents(currentUser.id)
         ]);
 
         if (classDoc) setCurrentClass(classDoc);
         if (coursesDocs) setCourses(coursesDocs);
-        if (membersDocs) setMembers(membersDocs);
         if (logsDocs) setAuditLogs(logsDocs);
         if (personalDocs) setPersonalEvents(personalDocs);
 
-        if (currentUser.role === 'DELEGATE' || currentUser.role === 'DEPUTY') {
-          const invDocs = await firestoreService.getInvitations(currentUser.classId);
+        if (isLeaderUser) {
+          const [membersDocs, invDocs] = await Promise.all([
+            firestoreService.getClassMembers(currentUser.classId),
+            firestoreService.getInvitations(currentUser.classId)
+          ]);
+          if (membersDocs) setMembers(membersDocs);
           if (invDocs) setInvitations(invDocs);
         }
       } else {
@@ -403,9 +406,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const promoteMember = async (userId: string, newRole: UserRole) => {
-    if (!currentUser?.classId) return { success: false, message: 'Aucune classe active' };
+    if (!currentUser?.classId || !currentClass) return { success: false, message: 'Aucune classe active' };
     try {
+      // 1. Update class document delegateIds / deputyIds first (sole authority)
+      let updatedDelegateIds = [...(currentClass.delegateIds || [])];
+      let updatedDeputyIds = [...(currentClass.deputyIds || [])];
+
+      if (newRole === 'DELEGATE') {
+        if (!updatedDelegateIds.includes(userId)) updatedDelegateIds.push(userId);
+        updatedDeputyIds = updatedDeputyIds.filter(id => id !== userId);
+      } else if (newRole === 'DEPUTY') {
+        if (!updatedDeputyIds.includes(userId)) updatedDeputyIds.push(userId);
+        updatedDelegateIds = updatedDelegateIds.filter(id => id !== userId);
+      } else {
+        updatedDelegateIds = updatedDelegateIds.filter(id => id !== userId);
+        updatedDeputyIds = updatedDeputyIds.filter(id => id !== userId);
+      }
+
+      await firestoreService.updateClass(currentClass.id, {
+        delegateIds: updatedDelegateIds,
+        deputyIds: updatedDeputyIds
+      });
+
+      // 2. Update user role
       await firestoreService.updateUser(userId, { role: newRole });
+
       await firestoreService.addAuditLog(currentUser.classId, {
         id: 'log_' + Date.now(),
         classId: currentUser.classId,
@@ -424,9 +449,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeMember = async (userId: string) => {
-    if (!currentUser?.classId) return { success: false, message: 'Aucune classe active' };
+    if (!currentUser?.classId || !currentClass) return { success: false, message: 'Aucune classe active' };
     try {
-      await firestoreService.updateUser(userId, { classId: undefined, role: 'STUDENT' });
+      const updatedDelegateIds = (currentClass.delegateIds || []).filter(id => id !== userId);
+      const updatedDeputyIds = (currentClass.deputyIds || []).filter(id => id !== userId);
+
+      await firestoreService.updateClass(currentClass.id, {
+        delegateIds: updatedDelegateIds,
+        deputyIds: updatedDeputyIds
+      });
+
+      await firestoreService.updateUser(userId, { classId: null, role: 'STUDENT', joinedWithInvitationId: undefined });
       await firestoreService.addAuditLog(currentUser.classId, {
         id: 'log_' + Date.now(),
         classId: currentUser.classId,
@@ -446,18 +479,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Invitations (Direct Firestore)
   const createInvitation = async (email: string, roleTarget?: UserRole) => {
     if (!currentUser?.classId) return { success: false, message: 'Aucune classe active' };
+    const normalizedEmail = email.trim().toLowerCase();
     const invId = 'inv_' + Math.random().toString(36).substring(2, 8);
     const code = `KLASS-${currentUser.classId}-${invId}`;
-    const newInv: ClassInvitation = {
+    const newInv: ClassInvitation & { targetRole?: string; isUsed?: boolean } = {
       id: invId,
       classId: currentUser.classId,
-      email,
+      email: normalizedEmail,
       roleTarget: roleTarget || 'STUDENT',
+      targetRole: roleTarget || 'STUDENT',
       token: code,
       code,
       invitedBy: currentUser.name,
       createdAt: new Date().toISOString(),
-      status: 'PENDING'
+      status: 'PENDING',
+      isUsed: false
     };
 
     try {
@@ -468,11 +504,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authorName: currentUser.name,
         authorRole: currentUser.role === 'DELEGATE' ? 'Délégué(e) titulaire' : 'Suppléant(e)',
         action: 'Invitation émise',
-        details: `Code généré pour ${email} (${roleTarget === 'DEPUTY' ? 'Suppléant' : 'Élève'})`,
+        details: `Code généré pour ${normalizedEmail} (${roleTarget === 'DEPUTY' ? 'Suppléant' : 'Élève'})`,
         timestamp: 'Aujourd\'hui à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
       });
       await refreshData();
-      return { success: true, message: `Invitation créée pour ${email}.`, invitation: newInv };
+      return { success: true, message: `Invitation créée pour ${normalizedEmail}.`, invitation: newInv };
     } catch (err: any) {
       return { success: false, message: err.message || 'Erreur d\'invitation.' };
     }
