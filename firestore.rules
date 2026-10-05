@@ -235,12 +235,9 @@ service cloud.firestore {
       }
 
       // Invitations subcollection
-      // Règle 3 : Lecture seulement par délégué ou personne invitée. Marquage « utilisée » une seule fois par l'invité.
       match /invitations/{invitationId} {
-        allow get: if isVerified() && (
-          isClassLeader(classId) ||
-          (resource.data.email.lower() == request.auth.token.email.lower())
-        );
+        // Lecture d'une invitation par son identifiant secret pour tout utilisateur connecté
+        allow get: if isVerified();
 
         allow list: if isClassLeader(classId);
 

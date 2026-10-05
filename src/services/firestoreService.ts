@@ -200,6 +200,57 @@ export class FirestoreService {
     }
   }
 
+  async getInvitationDetails(rawToken: string): Promise<{ invitation: ClassInvitation; classId: string; invitationId: string; className: string }> {
+    const trimmed = rawToken.trim();
+    let classId = '';
+    let invitationId = '';
+
+    if (trimmed.includes('__')) {
+      const parts = trimmed.split('__');
+      classId = parts[0];
+      invitationId = parts[1];
+    } else if (trimmed.includes('-')) {
+      const parts = trimmed.split('-');
+      if (parts.length >= 3 && parts[0] === 'KLASS') {
+        classId = parts[1];
+        invitationId = parts.slice(2).join('-');
+      } else {
+        classId = parts[0];
+        invitationId = parts[1];
+      }
+    } else {
+      throw new Error('Code d\'invitation invalide.');
+    }
+
+    const invRef = doc(db, 'classes', classId, 'invitations', invitationId);
+    const invSnap = await getDoc(invRef);
+    if (!invSnap.exists()) {
+      throw new Error('Invitation introuvable ou expirée.');
+    }
+
+    const invitation = invSnap.data() as ClassInvitation;
+    let className = invitation.className || '';
+
+    if (!className) {
+      try {
+        const classRef = doc(db, 'classes', classId);
+        const classSnap = await getDoc(classRef);
+        if (classSnap.exists()) {
+          className = classSnap.data().name || '';
+        }
+      } catch {
+        className = 'votre classe';
+      }
+    }
+
+    return {
+      invitation,
+      classId,
+      invitationId,
+      className: className || 'votre classe'
+    };
+  }
+
   async joinClassWithInvitationToken(rawToken: string, user: User): Promise<{ classInfo: ClassInfo; updatedUser: User }> {
     const trimmed = rawToken.trim();
     let classId = '';
@@ -213,7 +264,7 @@ export class FirestoreService {
       const parts = trimmed.split('-');
       if (parts.length >= 3 && parts[0] === 'KLASS') {
         classId = parts[1];
-        invitationId = parts[2];
+        invitationId = parts.slice(2).join('-');
       } else {
         classId = parts[0];
         invitationId = parts[1];

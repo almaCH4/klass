@@ -485,6 +485,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newInv: ClassInvitation & { targetRole?: string; isUsed?: boolean } = {
       id: invId,
       classId: currentUser.classId,
+      className: currentClass?.name || 'Classe',
       email: normalizedEmail,
       roleTarget: roleTarget || 'STUDENT',
       targetRole: roleTarget || 'STUDENT',

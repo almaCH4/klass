@@ -138,6 +138,7 @@ export interface PersonalEvent {
 export interface ClassInvitation {
   id: string;
   classId: string;
+  className?: string;
   email: string;
   roleTarget: UserRole;
   token: string;
