@@ -79,6 +79,14 @@ export interface Course {
     text: string;
     updatedAt: string;
   };
+  catchupData?: {
+    lessonSummary?: string;
+    adviceNote?: string;
+    links?: { title: string; url: string }[];
+    images?: { id: string; name: string; dataUrl: string; addedBy?: string; addedAt?: string }[];
+    updatedAt?: string;
+    updatedBy?: string;
+  };
   createdAt?: string;
 }
 
