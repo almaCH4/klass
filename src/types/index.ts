@@ -57,6 +57,7 @@ export interface Course {
   room: string;
   originalRoom?: string;
   dayOfWeek: number; // 1 = Lundi, 2 = Mardi, ..., 5 = Vendredi, 6 = Samedi
+  date?: string;      // YYYY-MM-DD
   startTime: string; // "08:00"
   endTime: string;   // "10:00"
   color: string;     // Hex or tailwind badge style

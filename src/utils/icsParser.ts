@@ -476,13 +476,35 @@ export function parseFullIcsContent(icsData: string, classId: string): ParsedIcs
       cleanSubject = parts[0].trim();
     }
 
-    // Extract Teacher
-    let teacher = 'Professeur';
-    const teacherMatch =
-      cleanedDescription.match(/(?:M\.|Mme|Mlle|Prof(?:esseur)?)\s+[A-Za-zÀ-ÿ\-]+/i) ||
-      rawSummary.match(/(?:M\.|Mme|Mlle)\s+[A-Za-zÀ-ÿ\-]+/i);
-    if (teacherMatch) {
-      teacher = teacherMatch[0].trim();
+    // Extract Teacher: real teacher name from "Professeur : ..." in description or summary
+    let teacher = '';
+    const descTeacherMatch =
+      cleanedDescription.match(/(?:Professeur|Enseignant(?:e)?)\s*:\s*([^\n\r,<]+)/i) ||
+      rawDescription.match(/(?:Professeur|Enseignant(?:e)?)\s*:\s*([^\n\r,<]+)/i);
+
+    if (descTeacherMatch && descTeacherMatch[1]) {
+      teacher = descTeacherMatch[1].trim();
+    }
+
+    if (!teacher) {
+      const titleTeacherMatch =
+        cleanedDescription.match(/(?:M\.|Mme|Mlle|Prof\.)\s+[A-Za-zÀ-ÿ\-]+(?:\s+[A-Za-zÀ-ÿ\-]+)?/i) ||
+        rawSummary.match(/(?:M\.|Mme|Mlle|Prof\.)\s+[A-Za-zÀ-ÿ\-]+(?:\s+[A-Za-zÀ-ÿ\-]+)?/i);
+      if (titleTeacherMatch) {
+        teacher = titleTeacherMatch[0].trim();
+      }
+    }
+
+    // Clean any prefix and never leave lone "Professeur"
+    teacher = teacher.replace(/^(?:Professeur|Enseignant(?:e)?)\s*:\s*/i, '').trim();
+    if (/^Professeur$/i.test(teacher) || /^Enseignant$/i.test(teacher) || teacher.length <= 1) {
+      teacher = '';
+    }
+
+    // Clean room: mask "Salle à définir" or empty
+    let cleanRoom = rawLocation;
+    if (/salle\s+[àa]\s+d[ée]finir/i.test(cleanRoom) || /inconnue/i.test(cleanRoom) || cleanRoom.toLowerCase() === 'salle') {
+      cleanRoom = '';
     }
 
     // Extract attached documents
@@ -510,24 +532,38 @@ export function parseFullIcsContent(icsData: string, classId: string): ParsedIcs
     }
 
     // Determine category
-    let category = 'Tronc commun';
-    if (/sp[ée]/i.test(cleanSubject) || (group && /sp[ée]/i.test(group))) {
-      category = 'Spécialité';
-    } else if (group) {
+    let category = '';
+    if (group) {
       category = group;
+    } else if (/sp[ée]/i.test(cleanSubject)) {
+      category = 'Spécialité';
     } else if (/option/i.test(cleanSubject)) {
       category = 'Option';
+    }
+
+    // Deduplicate courses: même matière, même début, même fin, même date
+    const courseKey = `${cleanSubject.trim().toLowerCase()}_${startInfo.timeStr}_${endTime}_${startInfo.dateIso}`;
+    const alreadyExists = courses.some(
+      c =>
+        c.subject.trim().toLowerCase() === cleanSubject.trim().toLowerCase() &&
+        c.startTime === startInfo.timeStr &&
+        c.endTime === endTime &&
+        c.date === startInfo.dateIso
+    );
+    if (alreadyExists) {
+      continue;
     }
 
     courses.push({
       id: 'c_' + Math.random().toString(36).substring(2, 10),
       classId,
       subject: cleanSubject || 'Cours',
-      category: group || category,
+      category: category || undefined,
       group,
       teacher,
-      room: rawLocation,
+      room: cleanRoom,
       dayOfWeek: startInfo.dayOfWeek,
+      date: startInfo.dateIso,
       startTime: startInfo.timeStr,
       endTime,
       color: getSubjectColor(cleanSubject),
@@ -542,8 +578,19 @@ export function parseFullIcsContent(icsData: string, classId: string): ParsedIcs
     });
   }
 
+  // Deduplicate homework: même matière + même date « Pour le » + même texte
+  const seenHwKeys = new Set<string>();
+  const uniqueHomework: Homework[] = [];
+  for (const hw of homework) {
+    const key = `${hw.subject.trim().toLowerCase()}_${hw.dueDateIso || hw.dueDate}_${hw.description.trim().toLowerCase()}`;
+    if (!seenHwKeys.has(key)) {
+      seenHwKeys.add(key);
+      uniqueHomework.push(hw);
+    }
+  }
+
   // Sort homework by due date ascending
-  homework.sort((a, b) => {
+  uniqueHomework.sort((a, b) => {
     if (a.dueDateIso && b.dueDateIso) {
       return a.dueDateIso.localeCompare(b.dueDateIso);
     }
@@ -560,7 +607,7 @@ export function parseFullIcsContent(icsData: string, classId: string): ParsedIcs
 
   return {
     courses,
-    homework,
+    homework: uniqueHomework,
     sessions,
     availableGroups: Array.from(groupsSet)
   };
