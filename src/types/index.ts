@@ -148,6 +148,8 @@ export interface ClassInvitation {
   invitedBy: string;
   createdAt: string;
   status: 'PENDING' | 'ACCEPTED' | 'REVOKED';
+  isUsed?: boolean;
+  usedBy?: string;
   acceptedAt?: string;
 }
 
@@ -164,7 +166,7 @@ export interface AuditLogItem {
 export interface ChatPollOption {
   id: string;
   text: string;
-  voterIds: string[];
+  voterIds?: string[];
 }
 
 export interface ChatPoll {
@@ -172,6 +174,7 @@ export interface ChatPoll {
   options: ChatPollOption[];
   isMultipleChoice: boolean;
   createdAt: string;
+  votes?: Record<string, string[]>; // Map indexée par UID utilisateur : [uid] -> string[] (ids des options choisies)
 }
 
 export interface ChatMessageReplyTo {
@@ -193,7 +196,8 @@ export interface ChatMessage {
   type?: 'text' | 'poll';
   poll?: ChatPoll;
   replyTo?: ChatMessageReplyTo;
-  reactions?: Record<string, string[]>; // emoji -> array of userIds
+  reactions?: Record<string, string[]>; // Map indexée par UID utilisateur : [uid] -> string[] (emojis choisis)
+  readBy?: Record<string, string>; // Map indexée par UID utilisateur : [uid] -> ISO string (timestamp de lecture)
   isPinned?: boolean;
   pinnedAt?: string;
   pinnedBy?: string;

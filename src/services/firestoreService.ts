@@ -15,6 +15,32 @@ import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../utils/firestoreError';
 import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, UserRole, ChatMessage, ChatPoll } from '../types';
 
+/**
+ * Nettoie récursivement les objets pour Firestore en supprimant toute valeur 'undefined'
+ */
+export function cleanFirestoreData<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    return obj
+      .filter(item => item !== undefined)
+      .map(item => cleanFirestoreData(item)) as unknown as T;
+  }
+  if (typeof obj === 'object') {
+    // Préserve les instances spéciales de Firebase (ex: deleteField(), serverTimestamp())
+    if (obj.constructor && obj.constructor.name !== 'Object') {
+      return obj;
+    }
+    const cleaned: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (val !== undefined) {
+        cleaned[key] = cleanFirestoreData(val);
+      }
+    }
+    return cleaned as T;
+  }
+  return obj;
+}
+
 export class FirestoreService {
   // -------------------------------------------------------------
   // USERS
@@ -33,7 +59,7 @@ export class FirestoreService {
   async setUser(user: User): Promise<void> {
     const path = `users/${user.id}`;
     try {
-      await setDoc(doc(db, 'users', user.id), user, { merge: true });
+      await setDoc(doc(db, 'users', user.id), cleanFirestoreData(user), { merge: true });
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -42,7 +68,7 @@ export class FirestoreService {
   async updateUser(userId: string, updates: Partial<User>): Promise<void> {
     const path = `users/${userId}`;
     try {
-      await updateDoc(doc(db, 'users', userId), updates);
+      await updateDoc(doc(db, 'users', userId), cleanFirestoreData(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -87,11 +113,12 @@ export class FirestoreService {
     const userPath = `users/${creatorUser.id}`;
     try {
       const batch = writeBatch(db);
-      batch.set(doc(db, 'classes', classData.id), classData);
-      batch.update(doc(db, 'users', creatorUser.id), {
+      batch.set(doc(db, 'classes', classData.id), cleanFirestoreData(classData));
+      batch.update(doc(db, 'users', creatorUser.id), cleanFirestoreData({
         classId: classData.id,
-        role: 'DELEGATE'
-      });
+        role: 'DELEGATE',
+        createdClassId: classData.id
+      }));
       await batch.commit();
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `${classPath} & ${userPath}`);
@@ -101,7 +128,7 @@ export class FirestoreService {
   async updateClass(classId: string, updates: Partial<ClassInfo>): Promise<void> {
     const path = `classes/${classId}`;
     try {
-      await updateDoc(doc(db, 'classes', classId), updates);
+      await updateDoc(doc(db, 'classes', classId), cleanFirestoreData(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -124,11 +151,11 @@ export class FirestoreService {
   async savePronoteSettings(classId: string, icalUrl: string, userName: string): Promise<void> {
     const path = `classes/${classId}/settings/pronote`;
     try {
-      await setDoc(doc(db, 'classes', classId, 'settings', 'pronote'), {
+      await setDoc(doc(db, 'classes', classId, 'settings', 'pronote'), cleanFirestoreData({
         icalUrl: icalUrl.trim(),
         updatedAt: new Date().toISOString(),
         updatedBy: userName
-      });
+      }));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -150,7 +177,7 @@ export class FirestoreService {
   async setCourse(classId: string, course: Course): Promise<void> {
     const path = `classes/${classId}/courses/${course.id}`;
     try {
-      await setDoc(doc(db, 'classes', classId, 'courses', course.id), course);
+      await setDoc(doc(db, 'classes', classId, 'courses', course.id), cleanFirestoreData(course));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -159,7 +186,7 @@ export class FirestoreService {
   async updateCourse(classId: string, courseId: string, updates: Partial<Course>): Promise<void> {
     const path = `classes/${classId}/courses/${courseId}`;
     try {
-      await updateDoc(doc(db, 'classes', classId, 'courses', courseId), updates);
+      await updateDoc(doc(db, 'classes', classId, 'courses', courseId), cleanFirestoreData(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -188,7 +215,7 @@ export class FirestoreService {
 
       // Add new courses
       for (const c of newCourses) {
-        batch.set(doc(db, 'classes', classId, 'courses', c.id), c);
+        batch.set(doc(db, 'classes', classId, 'courses', c.id), cleanFirestoreData(c));
       }
 
       await batch.commit();
@@ -213,7 +240,7 @@ export class FirestoreService {
   async createInvitation(classId: string, invitation: ClassInvitation): Promise<void> {
     const path = `classes/${classId}/invitations/${invitation.id}`;
     try {
-      await setDoc(doc(db, 'classes', classId, 'invitations', invitation.id), invitation);
+      await setDoc(doc(db, 'classes', classId, 'invitations', invitation.id), cleanFirestoreData(invitation));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -225,6 +252,27 @@ export class FirestoreService {
       await deleteDoc(doc(db, 'classes', classId, 'invitations', invitationId));
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  }
+
+  async revokeMemberInvitations(classId: string, userId: string, userEmail?: string): Promise<void> {
+    try {
+      const invCol = collection(db, 'classes', classId, 'invitations');
+      const snap = await getDocs(invCol);
+      const batch = writeBatch(db);
+      let count = 0;
+      for (const d of snap.docs) {
+        const data = d.data() as ClassInvitation;
+        if (data.usedBy === userId || (userEmail && data.email?.trim().toLowerCase() === userEmail.trim().toLowerCase())) {
+          batch.update(d.ref, { status: 'REVOKED', isUsed: true });
+          count++;
+        }
+      }
+      if (count > 0) {
+        await batch.commit();
+      }
+    } catch (err) {
+      console.error('Erreur lors de la révocation des invitations du membre exclu:', err);
     }
   }
 
@@ -312,18 +360,27 @@ export class FirestoreService {
     try {
       const invRef = doc(db, 'classes', classId, 'invitations', invitationId);
       const userRef = doc(db, 'users', user.id);
+      const classRef = doc(db, 'classes', classId);
 
       // Exécution dans une seule transaction Firestore atomique
       const transactionResult = await runTransaction(db, async (transaction) => {
-        const invSnap = await transaction.get(invRef);
+        const [invSnap, classSnap] = await Promise.all([
+          transaction.get(invRef),
+          transaction.get(classRef)
+        ]);
+
         if (!invSnap.exists()) {
           throw new Error('[invitation/not-found] Invitation introuvable ou expirée.');
         }
+        if (!classSnap.exists()) {
+          throw new Error('[class/not-found] Classe introuvable.');
+        }
 
         const invitation = invSnap.data() as ClassInvitation;
+        const classData = classSnap.data() as ClassInfo;
 
-        if (invitation.status === 'REVOKED') {
-          throw new Error('[invitation/revoked] Cette invitation a été révoquée par un délégué.');
+        if (invitation.status === 'REVOKED' || (invitation as any).isRevoked) {
+          throw new Error('[invitation/revoked] Cette invitation a été révoquée par un délégué. Vous ne pouvez plus rejoindre cette classe.');
         }
 
         const invEmail = (invitation.email || '').trim().toLowerCase();
@@ -336,11 +393,11 @@ export class FirestoreService {
             // L'utilisateur est déjà membre ou a déjà utilisé cette invitation :
             // On le fait simplement entrer dans la classe au lieu de lever une erreur
             const targetRole: UserRole = invitation.roleTarget || 'STUDENT';
-            transaction.update(userRef, {
+            transaction.update(userRef, cleanFirestoreData({
               classId,
               role: targetRole,
               joinedWithInvitationId: invitationId
-            });
+            }));
             return {
               targetRole,
               alreadyAccepted: true
@@ -362,18 +419,42 @@ export class FirestoreService {
 
         // Première adhésion : mise à jour atomique de l'invitation et du profil membre
         const targetRole: UserRole = invitation.roleTarget || 'STUDENT';
-        transaction.update(invRef, {
+
+        // Gestion de l'ajout dans delegateIds ou deputyIds pour les rôles délégués
+        if (targetRole === 'DELEGATE') {
+          const currentDelegates = classData.delegateIds || [];
+          if (!currentDelegates.includes(user.id)) {
+            if (currentDelegates.length >= 2) {
+              throw new Error('[class/full] Le nombre maximum de délégués titulaires (2) est déjà atteint.');
+            }
+            transaction.update(classRef, cleanFirestoreData({
+              delegateIds: [...currentDelegates, user.id]
+            }));
+          }
+        } else if (targetRole === 'DEPUTY') {
+          const currentDeputies = classData.deputyIds || [];
+          if (!currentDeputies.includes(user.id)) {
+            if (currentDeputies.length >= 2) {
+              throw new Error('[class/full] Le nombre maximum de suppléants (2) est déjà atteint.');
+            }
+            transaction.update(classRef, cleanFirestoreData({
+              deputyIds: [...currentDeputies, user.id]
+            }));
+          }
+        }
+
+        transaction.update(invRef, cleanFirestoreData({
           status: 'ACCEPTED',
           isUsed: true,
           usedBy: user.id,
           acceptedAt: new Date().toISOString()
-        });
+        }));
 
-        transaction.update(userRef, {
+        transaction.update(userRef, cleanFirestoreData({
           classId,
           role: targetRole,
           joinedWithInvitationId: invitationId
-        });
+        }));
 
         return {
           targetRole,
@@ -431,7 +512,7 @@ export class FirestoreService {
   async addAuditLog(classId: string, log: AuditLogItem): Promise<void> {
     const path = `classes/${classId}/auditLogs/${log.id}`;
     try {
-      await setDoc(doc(db, 'classes', classId, 'auditLogs', log.id), log);
+      await setDoc(doc(db, 'classes', classId, 'auditLogs', log.id), cleanFirestoreData(log));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -453,7 +534,7 @@ export class FirestoreService {
   async addPersonalEvent(userId: string, event: PersonalEvent): Promise<void> {
     const path = `users/${userId}/personalEvents/${event.id}`;
     try {
-      await setDoc(doc(db, 'users', userId, 'personalEvents', event.id), event);
+      await setDoc(doc(db, 'users', userId, 'personalEvents', event.id), cleanFirestoreData(event));
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
@@ -462,7 +543,7 @@ export class FirestoreService {
   async updatePersonalEvent(userId: string, eventId: string, updates: Partial<PersonalEvent>): Promise<void> {
     const path = `users/${userId}/personalEvents/${eventId}`;
     try {
-      await updateDoc(doc(db, 'users', userId, 'personalEvents', eventId), updates);
+      await updateDoc(doc(db, 'users', userId, 'personalEvents', eventId), cleanFirestoreData(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }
@@ -544,12 +625,50 @@ export class FirestoreService {
   }
 
   // -------------------------------------------------------------
+  // PRIVATE NOTES (Subcollection under /users/{userId}/privateNotes)
+  // Strictement privé pour l'utilisateur, aucun accès pour les délégués
+  // -------------------------------------------------------------
+  async getPrivateNotes(userId: string): Promise<{ text: string; lastSaved: string }> {
+    const path = `users/${userId}/privateNotes/notes`;
+    try {
+      const snap = await getDoc(doc(db, 'users', userId, 'privateNotes', 'notes'));
+      if (!snap.exists()) return { text: '', lastSaved: '' };
+      const data = snap.data();
+      return { text: data.text || '', lastSaved: data.lastSaved || '' };
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+      return { text: '', lastSaved: '' };
+    }
+  }
+
+  async savePrivateNotes(userId: string, text: string): Promise<string> {
+    const path = `users/${userId}/privateNotes/notes`;
+    const nowParis = new Intl.DateTimeFormat('fr-FR', {
+      timeZone: 'Europe/Paris',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date());
+    const lastSaved = `Sauvegardé sur le serveur à ${nowParis}`;
+
+    try {
+      await setDoc(doc(db, 'users', userId, 'privateNotes', 'notes'), cleanFirestoreData({
+        text,
+        lastSaved,
+        updatedAt: new Date().toISOString()
+      }), { merge: true });
+      return lastSaved;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  }
+
+  // -------------------------------------------------------------
   // CHAT MESSAGES
   // -------------------------------------------------------------
   async sendChatMessage(classId: string, message: ChatMessage): Promise<void> {
     const path = `classes/${classId}/messages/${message.id}`;
     try {
-      await setDoc(doc(db, 'classes', classId, 'messages', message.id), message);
+      await setDoc(doc(db, 'classes', classId, 'messages', message.id), cleanFirestoreData(message));
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, path);
     }
@@ -558,7 +677,7 @@ export class FirestoreService {
   async updateChatMessage(classId: string, messageId: string, updates: Partial<ChatMessage>): Promise<void> {
     const path = `classes/${classId}/messages/${messageId}`;
     try {
-      await updateDoc(doc(db, 'classes', classId, 'messages', messageId), updates);
+      await updateDoc(doc(db, 'classes', classId, 'messages', messageId), cleanFirestoreData(updates));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
     }

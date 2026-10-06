@@ -119,6 +119,7 @@ export const ClassChatView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   // Modals
   const [isPollModalOpen, setIsPollModalOpen] = useState(false);
@@ -242,35 +243,41 @@ export const ClassChatView: React.FC = () => {
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date();
 
+    const senderName = currentUser.name?.trim() || `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim() || 'Élève';
     const newMsg: ChatMessage = {
       id: messageId,
       classId: currentClass.id,
       senderId: currentUser.id,
-      senderName: currentUser.name || `${currentUser.firstName} ${currentUser.lastName}`.trim(),
-      senderAvatar: currentUser.avatarUrl || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(currentUser.email)}`,
-      senderRole: currentUser.role,
+      senderName,
+      senderAvatar: currentUser.avatarUrl || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(currentUser.email || currentUser.id)}`,
+      senderRole: currentUser.role || 'STUDENT',
       text: sanitizedText,
       createdAt: now.toISOString(),
       timestampMs: now.getTime(),
       type: 'text',
-      replyTo: replyingTo
-        ? {
-            id: replyingTo.id,
-            senderName: replyingTo.senderName,
-            text: replyingTo.text.substring(0, 120)
-          }
-        : undefined,
       reactions: {}
     };
+
+    if (replyingTo) {
+      newMsg.replyTo = {
+        id: replyingTo.id,
+        senderName: replyingTo.senderName,
+        text: replyingTo.text.substring(0, 120)
+      };
+    }
 
     setInputText('');
     setReplyingTo(null);
     setShowEmojiPicker(false);
+    setChatError(null);
 
     try {
       await firestoreService.sendChatMessage(currentClass.id, newMsg);
     } catch (err: any) {
       console.error('Erreur envoi message:', err);
+      const code = err.message?.match(/\[(.*?)\]/)?.[1] || err.code || 'chat/error';
+      setChatError(`[${code}] Impossible d'envoyer le message. Veuillez vérifier vos autorisations.`);
+      setTimeout(() => setChatError(null), 5000);
     }
   };
 
@@ -316,7 +323,7 @@ export const ClassChatView: React.FC = () => {
   };
 
   // ==========================================
-  // VOTE IN POLL
+  // VOTE IN POLL (Indexed by UID)
   // ==========================================
   const handleVotePoll = async (msg: ChatMessage, optionId: string) => {
     if (!currentClass || !currentUser || !msg.poll) return;
@@ -325,34 +332,40 @@ export const ClassChatView: React.FC = () => {
     const isMultiple = poll.isMultipleChoice;
     const userId = currentUser.id;
 
-    const updatedOptions = poll.options.map((opt) => {
-      let voterIds = [...(opt.voterIds || [])];
+    // Récupère les votes actuels de l'utilisateur
+    const currentVotes = (poll.votes?.[userId] || []) as string[];
+    let updatedVotes: string[] = [];
 
-      if (opt.id === optionId) {
-        if (voterIds.includes(userId)) {
-          // Toggle off
-          voterIds = voterIds.filter(id => id !== userId);
-        } else {
-          voterIds.push(userId);
-        }
+    if (isMultiple) {
+      if (currentVotes.includes(optionId)) {
+        updatedVotes = currentVotes.filter(id => id !== optionId);
       } else {
-        if (!isMultiple) {
-          // Single choice: remove user from other options
-          voterIds = voterIds.filter(id => id !== userId);
-        }
+        updatedVotes = [...currentVotes, optionId];
       }
+    } else {
+      if (currentVotes.includes(optionId)) {
+        updatedVotes = [];
+      } else {
+        updatedVotes = [optionId];
+      }
+    }
 
-      return {
-        ...opt,
-        voterIds
-      };
-    });
+    const updatedPollVotes = {
+      ...(poll.votes || {}),
+      [userId]: updatedVotes
+    };
+    if (updatedVotes.length === 0) {
+      delete updatedPollVotes[userId];
+    }
 
     try {
       await firestoreService.updateChatMessage(currentClass.id, msg.id, {
         poll: {
-          ...poll,
-          options: updatedOptions
+          question: poll.question, // Invariable
+          options: poll.options,   // Invariable
+          isMultipleChoice: poll.isMultipleChoice,
+          createdAt: poll.createdAt,
+          votes: updatedPollVotes
         }
       });
     } catch (err) {
@@ -361,29 +374,62 @@ export const ClassChatView: React.FC = () => {
   };
 
   // ==========================================
-  // EMOJI REACTIONS
+  // EMOJI REACTIONS (Indexed by UID)
   // ==========================================
   const handleToggleReaction = async (msg: ChatMessage, emoji: string) => {
     if (!currentClass || !currentUser) return;
 
-    const reactions = { ...(msg.reactions || {}) };
-    const currentList = reactions[emoji] || [];
+    const userId = currentUser.id;
+    let userEmojis: string[] = [];
 
-    if (currentList.includes(currentUser.id)) {
-      reactions[emoji] = currentList.filter(id => id !== currentUser.id);
-      if (reactions[emoji].length === 0) {
-        delete reactions[emoji];
+    if (msg.reactions && Array.isArray(msg.reactions[userId])) {
+      userEmojis = [...msg.reactions[userId]];
+    } else if (msg.reactions) {
+      // Rétrocompatibilité avec l'ancienne structure emoji -> uids
+      for (const [em, uids] of Object.entries(msg.reactions)) {
+        if (Array.isArray(uids) && uids.includes(userId)) {
+          userEmojis.push(em);
+        }
       }
+    }
+
+    let updatedUserEmojis: string[] = [];
+    if (userEmojis.includes(emoji)) {
+      updatedUserEmojis = userEmojis.filter(e => e !== emoji);
     } else {
-      reactions[emoji] = [...currentList, currentUser.id];
+      updatedUserEmojis = [...userEmojis, emoji];
+    }
+
+    const updatedReactions = {
+      ...(msg.reactions || {}),
+      [userId]: updatedUserEmojis
+    };
+    if (updatedUserEmojis.length === 0) {
+      delete updatedReactions[userId];
     }
 
     try {
       await firestoreService.updateChatMessage(currentClass.id, msg.id, {
-        reactions
+        reactions: updatedReactions
       });
     } catch (err) {
       console.error('Erreur réaction:', err);
+    }
+  };
+
+  // Confirmation de lecture automatique indexée par UID
+  const handleMarkAsRead = async (msg: ChatMessage) => {
+    if (!currentClass || !currentUser || msg.readBy?.[currentUser.id]) return;
+    const updatedReadBy = {
+      ...(msg.readBy || {}),
+      [currentUser.id]: new Date().toISOString()
+    };
+    try {
+      await firestoreService.updateChatMessage(currentClass.id, msg.id, {
+        readBy: updatedReadBy
+      });
+    } catch {
+      // Ignorer silencieusement
     }
   };
 
@@ -744,50 +790,52 @@ export const ClassChatView: React.FC = () => {
 
                         {/* Poll options list */}
                         <div className="space-y-1.5">
-                          {msg.poll.options.map((opt) => {
-                            const totalVotes = msg.poll!.options.reduce(
-                              (acc, o) => acc + (o.voterIds?.length || 0),
-                              0
-                            );
-                            const optVotes = opt.voterIds?.length || 0;
-                            const percent = totalVotes > 0 ? Math.round((optVotes / totalVotes) * 100) : 0;
-                            const hasVoted = Boolean(currentUser && opt.voterIds?.includes(currentUser.id));
+                          {(() => {
+                            const totalVotes = Object.values(msg.poll.votes || {}).reduce((acc, userOpts) => acc + (Array.isArray(userOpts) ? userOpts.length : 0), 0) ||
+                              msg.poll.options.reduce((acc, o) => acc + (o.voterIds?.length || 0), 0);
 
-                            return (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                onClick={() => handleVotePoll(msg, opt.id)}
-                                className={`w-full text-left p-2 rounded-xl text-xs relative overflow-hidden transition-all border ${
-                                  hasVoted
-                                    ? isMe
-                                      ? 'border-white bg-white/20 font-bold'
-                                      : 'border-[#234E70] dark:border-sky-400 bg-sky-50/50 dark:bg-sky-950/40 font-bold'
-                                    : isMe
-                                    ? 'border-white/20 bg-white/10 hover:bg-white/15'
-                                    : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100'
-                                }`}
-                              >
-                                {/* Percentage bar background */}
-                                <div
-                                  className={`absolute top-0 bottom-0 left-0 transition-all ${
-                                    isMe ? 'bg-white/20' : 'bg-[#234E70]/15 dark:bg-sky-400/20'
+                            return msg.poll.options.map((opt) => {
+                              const optVotes = Object.values(msg.poll!.votes || {}).filter(userOpts => Array.isArray(userOpts) && userOpts.includes(opt.id)).length +
+                                (opt.voterIds?.length || 0);
+                              const percent = totalVotes > 0 ? Math.round((optVotes / totalVotes) * 100) : 0;
+                              const hasVoted = Boolean(currentUser && (msg.poll!.votes?.[currentUser.id]?.includes(opt.id) || opt.voterIds?.includes(currentUser.id)));
+
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => handleVotePoll(msg, opt.id)}
+                                  className={`w-full text-left p-2 rounded-xl text-xs relative overflow-hidden transition-all border ${
+                                    hasVoted
+                                      ? isMe
+                                        ? 'border-white bg-white/20 font-bold'
+                                        : 'border-[#234E70] dark:border-sky-400 bg-sky-50/50 dark:bg-sky-950/40 font-bold'
+                                      : isMe
+                                      ? 'border-white/20 bg-white/10 hover:bg-white/15'
+                                      : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100'
                                   }`}
-                                  style={{ width: `${percent}%` }}
-                                />
+                                >
+                                  {/* Percentage bar background */}
+                                  <div
+                                    className={`absolute top-0 bottom-0 left-0 transition-all ${
+                                      isMe ? 'bg-white/20' : 'bg-[#234E70]/15 dark:bg-sky-400/20'
+                                    }`}
+                                    style={{ width: `${percent}%` }}
+                                  />
 
-                                <div className="relative z-10 flex items-center justify-between gap-2">
-                                  <span className="flex items-center space-x-1.5 truncate">
-                                    {hasVoted && <Check className="w-3.5 h-3.5 shrink-0" />}
-                                    <span className="truncate">{opt.text}</span>
-                                  </span>
-                                  <span className="shrink-0 text-[11px] font-semibold opacity-80">
-                                    {optVotes} ({percent}%)
-                                  </span>
-                                </div>
-                              </button>
-                            );
-                          })}
+                                  <div className="relative z-10 flex items-center justify-between gap-2">
+                                    <span className="flex items-center space-x-1.5 truncate">
+                                      {hasVoted && <Check className="w-3.5 h-3.5 shrink-0" />}
+                                      <span className="truncate">{opt.text}</span>
+                                    </span>
+                                    <span className="shrink-0 text-[11px] font-semibold opacity-80">
+                                      {optVotes} ({percent}%)
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            });
+                          })()}
                         </div>
 
                         <div className="flex items-center justify-between text-[10px] opacity-75 pt-1">
@@ -795,7 +843,8 @@ export const ClassChatView: React.FC = () => {
                             {msg.poll.isMultipleChoice ? 'Choix multiple' : 'Choix unique'}
                           </span>
                           <span>
-                            {msg.poll.options.reduce((acc, o) => acc + (o.voterIds?.length || 0), 0)} vote(s)
+                            {Object.values(msg.poll.votes || {}).reduce((acc, userOpts) => acc + (Array.isArray(userOpts) ? userOpts.length : 0), 0) ||
+                             msg.poll.options.reduce((acc, o) => acc + (o.voterIds?.length || 0), 0)} vote(s)
                           </span>
                         </div>
                       </div>
@@ -833,33 +882,59 @@ export const ClassChatView: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Reaction Pills on Bubble Edge */}
-                    {msg.reactions && Object.keys(msg.reactions).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5 pt-1 border-t border-black/10 dark:border-white/10">
-                        {Object.entries(msg.reactions).map(([emoji, userIds]) => {
-                          const hasReacted = Boolean(currentUser && userIds.includes(currentUser.id));
-                          return (
-                            <button
-                              key={emoji}
-                              type="button"
-                              onClick={() => handleToggleReaction(msg, emoji)}
-                              className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${
-                                hasReacted
-                                  ? isMe
-                                    ? 'bg-white/30 text-white font-bold'
-                                    : 'bg-[#234E70]/15 dark:bg-sky-400/20 text-[#234E70] dark:text-sky-300 font-bold border border-[#234E70]/30'
-                                  : isMe
-                                  ? 'bg-white/15 text-white'
-                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-                              }`}
-                            >
-                              <span>{emoji}</span>
-                              <span className="text-[10px]">{userIds.length}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                    {/* Reaction Pills on Bubble Edge (Supports UID-indexed maps) */}
+                    {(() => {
+                      if (!msg.reactions) return null;
+                      const counts: Record<string, number> = {};
+                      const myReacted = new Set<string>();
+
+                      for (const [key, val] of Object.entries(msg.reactions)) {
+                        if (Array.isArray(val)) {
+                          if (val.length > 0 && typeof val[0] === 'string' && val[0].length <= 8) {
+                            // Map indexée par UID : key = userId, val = emojis[]
+                            val.forEach(em => {
+                              counts[em] = (counts[em] || 0) + 1;
+                              if (currentUser && key === currentUser.id) myReacted.add(em);
+                            });
+                          } else {
+                            // Ancienne structure : key = emoji, val = uids[]
+                            const emoji = key;
+                            counts[emoji] = (counts[emoji] || 0) + val.length;
+                            if (currentUser && val.includes(currentUser.id)) myReacted.add(emoji);
+                          }
+                        }
+                      }
+
+                      const entries = Object.entries(counts);
+                      if (entries.length === 0) return null;
+
+                      return (
+                        <div className="flex flex-wrap gap-1 mt-1.5 pt-1 border-t border-black/10 dark:border-white/10">
+                          {entries.map(([emoji, count]) => {
+                            const hasReacted = myReacted.has(emoji);
+                            return (
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={() => handleToggleReaction(msg, emoji)}
+                                className={`inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-full text-xs transition-all ${
+                                  hasReacted
+                                    ? isMe
+                                      ? 'bg-white/30 text-white font-bold'
+                                      : 'bg-[#234E70]/15 dark:bg-sky-400/20 text-[#234E70] dark:text-sky-300 font-bold border border-[#234E70]/30'
+                                    : isMe
+                                    ? 'bg-white/15 text-white'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                                }`}
+                              >
+                                <span>{emoji}</span>
+                                <span className="text-[10px]">{count}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Hover Actions Toolbar */}
@@ -999,6 +1074,12 @@ export const ClassChatView: React.FC = () => {
       {/* WHATSAPP-LIKE BOTTOM INPUT BAR */}
       {/* ==================================================== */}
       <div className="bg-[#FAF8F5] dark:bg-[#1A2026] p-3 border-t border-slate-200 dark:border-slate-800 z-10 shrink-0">
+        {chatError && (
+          <div className="mb-2 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-300 text-xs font-semibold flex items-center justify-between">
+            <span>{chatError}</span>
+            <button type="button" onClick={() => setChatError(null)} className="ml-2 font-bold hover:opacity-80">×</button>
+          </div>
+        )}
         {isMuted ? (
           <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200 text-xs font-semibold flex items-center justify-center space-x-2 border border-rose-200 dark:border-rose-900">
             <VolumeX className="w-4 h-4 shrink-0" />

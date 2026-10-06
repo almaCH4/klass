@@ -45,6 +45,7 @@ service cloud.firestore {
       );
     }
 
+    // Délégué titulaire uniquement (pas les suppléants)
     function isTitularDelegate(classId) {
       return isVerified() && exists(/databases/$(database)/documents/classes/$(classId)) &&
         ('delegateIds' in getClassData(classId) && request.auth.uid in getClassData(classId).delegateIds);
@@ -57,10 +58,13 @@ service cloud.firestore {
       );
     }
 
+    // Vérifie qu'une invitation valide et NON révoquée existe pour le membre
     function hasValidInvitation(classId) {
       return ('joinedWithInvitationId' in getUserData()) &&
+             getUserData().joinedWithInvitationId != null &&
              isValidId(getUserData().joinedWithInvitationId) &&
              exists(/databases/$(database)/documents/classes/$(classId)/invitations/$(getUserData().joinedWithInvitationId)) &&
+             get(/databases/$(database)/documents/classes/$(classId)/invitations/$(getUserData().joinedWithInvitationId)).data.status != 'REVOKED' &&
              get(/databases/$(database)/documents/classes/$(classId)/invitations/$(getUserData().joinedWithInvitationId)).data.email.lower() == request.auth.token.email.lower();
     }
 
@@ -70,6 +74,7 @@ service cloud.firestore {
     }
 
     // 1. Validation de l'adhésion à la classe (classId)
+    // Refus strict si l'invitation est révoquée ou déjà utilisée
     function isValidClassJoin(incomingData, existingData) {
       let hasNoClass = (!('classId' in incomingData)) || incomingData.classId == null;
       let isClassUnchanged = existingData != null && ('classId' in existingData) && incomingData.classId == existingData.classId;
@@ -80,32 +85,60 @@ service cloud.firestore {
 
       let hasValidInvite = incomingData.classId != null &&
         ('joinedWithInvitationId' in incomingData) &&
+        incomingData.joinedWithInvitationId != null &&
         isValidId(incomingData.joinedWithInvitationId) &&
         exists(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)) &&
+        get(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)).data.status != 'REVOKED' &&
         get(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)).data.email.lower() == request.auth.token.email.lower() &&
         (
           (!('isUsed' in get(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)).data)) ||
-          get(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)).data.isUsed == false ||
-          get(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)).data.usedBy == request.auth.uid
+          get(/databases/$(database)/documents/classes/$(incomingData.classId)/invitations/$(incomingData.joinedWithInvitationId)).data.isUsed == false
         );
 
       return hasNoClass || isClassUnchanged || isDelegateCreator || hasValidInvite;
     }
 
-    // 2. Validation du rôle (DELEGATE / DEPUTY uniquement si présent dans le document de classe)
-    function isValidRoleAssignment(incomingData) {
+    // 2. Validation du rôle : à l'adhésion, le rôle écrit doit être exactement celui de l'invitation
+    function isValidRoleAssignment(incomingData, existingData) {
       let role = incomingData.role;
       let classId = incomingData.classId;
 
-      return (role == 'STUDENT') ||
+      // Adhésion initiale par invitation : le rôle doit correspondre exactement à roleTarget de l'invitation
+      let isInviteRoleMatch = (
+        classId != null &&
+        ('joinedWithInvitationId' in incomingData) &&
+        incomingData.joinedWithInvitationId != null &&
+        isValidId(incomingData.joinedWithInvitationId) &&
+        exists(/databases/$(database)/documents/classes/$(classId)/invitations/$(incomingData.joinedWithInvitationId)) &&
+        role == get(/databases/$(database)/documents/classes/$(classId)/invitations/$(incomingData.joinedWithInvitationId)).data.roleTarget
+      );
+
+      return (role == 'STUDENT' && (existingData == null || existingData.role == 'STUDENT' || isInviteRoleMatch)) ||
+        isInviteRoleMatch ||
         (
           classId != null &&
           exists(/databases/$(database)/documents/classes/$(classId)) &&
           (
-            (role == 'DELEGATE' && request.auth.uid in get(/databases/$(database)/documents/classes/$(classId)).data.delegateIds) ||
-            (role == 'DEPUTY' && ('deputyIds' in get(/databases/$(database)/documents/classes/$(classId)).data) && request.auth.uid in get(/databases/$(database)/documents/classes/$(classId)).data.deputyIds)
+            (role == 'DELEGATE' && (
+              request.auth.uid in get(/databases/$(database)/documents/classes/$(classId)).data.delegateIds ||
+              (existsAfter(/databases/$(database)/documents/classes/$(classId)) && request.auth.uid in getAfter(/databases/$(database)/documents/classes/$(classId)).data.delegateIds)
+            )) ||
+            (role == 'DEPUTY' && (
+              ('deputyIds' in get(/databases/$(database)/documents/classes/$(classId)).data && request.auth.uid in get(/databases/$(database)/documents/classes/$(classId)).data.deputyIds) ||
+              (existsAfter(/databases/$(database)/documents/classes/$(classId)) && 'deputyIds' in getAfter(/databases/$(database)/documents/classes/$(classId)).data && request.auth.uid in getAfter(/databases/$(database)/documents/classes/$(classId)).data.deputyIds)
+            ))
           )
         );
+    }
+
+    // Vérifie que l'utilisateur possède une invitation valide non révoquée pour un rôle donné
+    function hasValidRoleInvite(classId, targetRole) {
+      return existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.joinedWithInvitationId != null &&
+             exists(/databases/$(database)/documents/classes/$(classId)/invitations/$(getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.joinedWithInvitationId)) &&
+             get(/databases/$(database)/documents/classes/$(classId)/invitations/$(getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.joinedWithInvitationId)).data.status != 'REVOKED' &&
+             get(/databases/$(database)/documents/classes/$(classId)/invitations/$(getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.joinedWithInvitationId)).data.email.lower() == request.auth.token.email.lower() &&
+             get(/databases/$(database)/documents/classes/$(classId)/invitations/$(getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.joinedWithInvitationId)).data.roleTarget == targetRole;
     }
 
     // Entity Validations
@@ -115,15 +148,16 @@ service cloud.firestore {
              data.name is string && data.name.size() <= 100 &&
              data.role in ['STUDENT', 'DELEGATE', 'DEPUTY'] &&
              (!('classId' in data) || data.classId == null || (data.classId is string && data.classId.size() <= 128)) &&
-             (!('joinedWithInvitationId' in data) || (data.joinedWithInvitationId is string && data.joinedWithInvitationId.size() <= 128));
+             (!('createdClassId' in data) || data.createdClassId == null || (data.createdClassId is string && data.createdClassId.size() <= 128)) &&
+             (!('joinedWithInvitationId' in data) || data.joinedWithInvitationId == null || (data.joinedWithInvitationId is string && data.joinedWithInvitationId.size() <= 128));
     }
 
     function isValidClass(data) {
       return data.id is string && data.id.size() <= 128 &&
              data.name is string && data.name.size() <= 80 &&
              data.schoolName is string && data.schoolName.size() <= 100 &&
-             data.delegateIds is list && data.delegateIds.size() <= 10 &&
-             (!('deputyIds' in data) || (data.deputyIds is list && data.deputyIds.size() <= 10)) &&
+             data.delegateIds is list && data.delegateIds.size() <= 2 &&
+             (!('deputyIds' in data) || (data.deputyIds is list && data.deputyIds.size() <= 2)) &&
              (!('chatDescription' in data) || (data.chatDescription is string && data.chatDescription.size() <= 1000)) &&
              (!('pinnedMessageId' in data) || (data.pinnedMessageId is string && data.pinnedMessageId.size() <= 128)) &&
              (!('badWordsList' in data) || (data.badWordsList is list && data.badWordsList.size() <= 100)) &&
@@ -157,15 +191,13 @@ service cloud.firestore {
              data.endTime is string && data.endTime.size() <= 10;
     }
 
+    // roleTarget unifié autorisant STUDENT, DEPUTY et DELEGATE (titulaire)
     function isValidInvitation(data) {
       return data.id is string && data.id.size() <= 128 &&
              data.classId is string && data.classId.size() <= 128 &&
              data.code is string && data.code.size() <= 64 &&
              (!('email' in data) || (data.email is string && data.email.size() <= 128)) &&
-             (
-               ('roleTarget' in data && data.roleTarget in ['STUDENT', 'DEPUTY']) ||
-               ('targetRole' in data && data.targetRole in ['STUDENT', 'DEPUTY'])
-             );
+             ('roleTarget' in data && data.roleTarget in ['STUDENT', 'DEPUTY', 'DELEGATE']);
     }
 
     function isValidAuditLog(data) {
@@ -176,7 +208,8 @@ service cloud.firestore {
     }
 
     // 1. Users Collection
-    // Règle 7 : L'e-mail des élèves n'est pas lisible par les autres élèves. Seuls l'utilisateur et les délégués peuvent lire le document.
+    // Personne ne peut modifier son propre rôle : fixé uniquement par invitation ou par un délégué titulaire.
+    // L'utilisateur ne peut pas remettre lui-même createdClassId à null.
     match /users/{userId} {
       allow get: if isVerified() && (
         request.auth.uid == userId ||
@@ -184,42 +217,84 @@ service cloud.firestore {
       );
       allow list: if isVerified() && isClassLeader(resource.data.classId);
       allow create: if isVerified() && request.auth.uid == userId && isValidUser(incoming()) &&
-                    isValidRoleAssignment(incoming()) &&
+                    isValidRoleAssignment(incoming(), null) &&
                     isValidClassJoin(incoming(), null);
       allow update: if isVerified() && isValidUser(incoming()) &&
                     incoming().id == existing().id &&
                     incoming().email == existing().email &&
-                    isValidRoleAssignment(incoming()) &&
-                    isValidClassJoin(incoming(), existing()) && (
-                      request.auth.uid == userId ||
-                      (existing().classId != null && isClassLeader(existing().classId))
+                    isValidRoleAssignment(incoming(), existing()) &&
+                    isValidClassJoin(incoming(), existing()) &&
+                    // Protection createdClassId : impossible de remettre à null si déjà défini
+                    (!('createdClassId' in existing()) || (('createdClassId' in incoming()) && incoming().createdClassId == existing().createdClassId)) &&
+                    (
+                      // L'utilisateur met à jour son propre profil : rôle inchangé, sauf si adhésion par invitation
+                      (request.auth.uid == userId && (
+                        incoming().role == existing().role ||
+                        (existing().classId == null && isValidClassJoin(incoming(), existing()))
+                      )) ||
+                      // Délégué titulaire de sa classe qui gère les rôles ou l'exclusion
+                      (existing().classId != null && isTitularDelegate(existing().classId))
                     );
       allow delete: if isVerified() && request.auth.uid == userId;
 
-      // Personal Events subcollection
+      // Événements personnels : uniquement le propriétaire, aucun accès pour les délégués
       match /personalEvents/{eventId} {
+        allow read, write: if isVerified() && request.auth.uid == userId;
+      }
+
+      // Bloc-notes personnel : uniquement le propriétaire, aucun accès pour les délégués
+      match /privateNotes/{noteId} {
         allow read, write: if isVerified() && request.auth.uid == userId;
       }
     }
 
     // 2. Classes Collection
-    // Règle 4 : Lecture d'une classe seulement pour les membres ou une personne avec invitation valide. Pas de lecture libre.
-    // Règle 6 : Seuls les délégués titulaires peuvent modifier delegateIds.
+    // Règle 4 : Seuls les délégués titulaires peuvent modifier delegateIds et deputyIds
+    // Un utilisateur ne peut créer qu'une seule classe et ne doit pas déjà être membre d'une classe
     match /classes/{classId} {
       allow get: if isVerified() && (
         isClassMember(classId) ||
         hasValidInvitation(classId)
       );
-      allow list: if false; // Pas de lecture libre ni listing
+      allow list: if false; // Pas de listing libre
 
       allow create: if isVerified() && isValidId(classId) && isValidClass(incoming()) &&
-                    request.auth.uid in incoming().delegateIds;
+                    request.auth.uid in incoming().delegateIds &&
+                    (!('classId' in getUserData()) || getUserData().classId == null) &&
+                    (!('createdClassId' in getUserData()) || getUserData().createdClassId == null);
 
-      allow update: if isVerified() && isValidId(classId) && isClassLeader(classId) &&
-                    isValidClass(incoming()) && incoming().id == existing().id &&
+      allow update: if isVerified() && isValidId(classId) && isValidClass(incoming()) && incoming().id == existing().id &&
                     (
-                      incoming().delegateIds == existing().delegateIds ||
-                      isTitularDelegate(classId)
+                      // 1. Délégué titulaire peut tout modifier, y compris delegateIds et deputyIds (max 2 chacun)
+                      (isTitularDelegate(classId) && incoming().delegateIds.size() <= 2 && (!('deputyIds' in incoming()) || incoming().deputyIds.size() <= 2)) ||
+                      // 2. Délégué suppléant peut modifier les paramètres généraux MAIS NE PEUT PAS toucher à delegateIds NI à deputyIds
+                      (
+                        isClassLeader(classId) &&
+                        incoming().delegateIds == existing().delegateIds &&
+                        (
+                          (!('deputyIds' in existing()) && !('deputyIds' in incoming())) ||
+                          incoming().deputyIds == existing().deputyIds
+                        )
+                      ) ||
+                      // 3. Auto-adhésion par invitation : l'invité ajoute uniquement son propre UID (dans la limite de 2)
+                      (
+                        // Invitation titulaire (DELEGATE)
+                        hasValidRoleInvite(classId, 'DELEGATE') &&
+                        existing().delegateIds.size() < 2 &&
+                        incoming().delegateIds.size() == existing().delegateIds.size() + 1 &&
+                        incoming().delegateIds.hasAll(existing().delegateIds) &&
+                        incoming().delegateIds.hasAll([request.auth.uid]) &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['delegateIds'])
+                      ) ||
+                      (
+                        // Invitation suppléant (DEPUTY)
+                        hasValidRoleInvite(classId, 'DEPUTY') &&
+                        (!('deputyIds' in existing()) || existing().deputyIds.size() < 2) &&
+                        incoming().deputyIds.size() == (('deputyIds' in existing()) ? existing().deputyIds.size() + 1 : 1) &&
+                        (!('deputyIds' in existing()) || incoming().deputyIds.hasAll(existing().deputyIds)) &&
+                        incoming().deputyIds.hasAll([request.auth.uid]) &&
+                        incoming().diff(existing()).affectedKeys().hasOnly(['deputyIds'])
+                      )
                     );
 
       allow delete: if false;
@@ -235,9 +310,12 @@ service cloud.firestore {
       }
 
       // Invitations subcollection
+      // Lisibles et gérables par les délégués de la classe, et par la personne invitée pour sa propre invitation
       match /invitations/{invitationId} {
-        // Lecture d'une invitation par son identifiant secret pour tout utilisateur connecté
-        allow get: if isVerified();
+        allow get: if isVerified() && (
+          isClassLeader(classId) ||
+          (resource.data.email.lower() == request.auth.token.email.lower())
+        );
 
         allow list: if isClassLeader(classId);
 
@@ -246,6 +324,7 @@ service cloud.firestore {
 
         allow update: if isClassLeader(classId) || (
           isVerified() &&
+          existing().status != 'REVOKED' &&
           existing().email.lower() == request.auth.token.email.lower() &&
           (!('isUsed' in existing()) || existing().isUsed == false) &&
           incoming().isUsed == true &&
@@ -257,11 +336,12 @@ service cloud.firestore {
       }
 
       // Audit Logs subcollection
+      // Règle 5 : Lecture STRICTEMENT réservée aux délégués de la classe
       match /auditLogs/{logId} {
-        allow read: if isClassMember(classId);
+        allow read: if isClassLeader(classId);
         allow create: if isClassLeader(classId) && isValidId(logId) && isValidAuditLog(incoming()) &&
                       incoming().classId == classId;
-        allow update, delete: if false; // Audit logs are immutable
+        allow update, delete: if false; // Immuable
       }
 
       // Configuration privée de la classe (ex: lien d'abonnement iCal Pronote)
@@ -271,25 +351,40 @@ service cloud.firestore {
       }
 
       // Chat Messages subcollection (Groupe de classe)
-      // Règle 5 : senderName == profil. Sondages : options/questions inchangées. Réactions/signalements protégés.
+      // Réactions, votes et confirmations de lecture : un membre ne modifie que SA propre entrée indexée par UID.
+      // La question et le texte des options d'un sondage ne doivent jamais changer.
       match /messages/{messageId} {
         allow read: if isClassMember(classId);
 
         allow create: if isClassMember(classId) && isNotMuted(classId) &&
                       isValidId(messageId) && isValidChatMessage(incoming()) &&
                       incoming().classId == classId &&
-                      incoming().senderName == getUserData().name &&
+                      incoming().senderId == request.auth.uid &&
                       (!('type' in incoming()) || incoming().type != 'poll' || isClassLeader(classId));
 
         allow update: if isClassMember(classId) && isValidId(messageId) && (
+          // Modération délégués (épinglage, modération générale)
           isClassLeader(classId) ||
-          incoming().diff(existing()).affectedKeys().hasOnly(['reactions']) ||
+          // Réactions : modification UNIQUEMENT de sa propre entrée reactions[request.auth.uid]
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['reactions']) &&
+            (!('reactions' in existing()) || incoming().reactions.diff(existing().reactions).affectedKeys().hasOnly([request.auth.uid]))
+          ) ||
+          // Votes de sondage : modification UNIQUEMENT de sa propre entrée poll.votes[request.auth.uid]
+          // La question et les options ne changent jamais
           (
             incoming().diff(existing()).affectedKeys().hasOnly(['poll']) &&
             incoming().poll.question == existing().poll.question &&
+            incoming().poll.options == existing().poll.options &&
             incoming().poll.isMultipleChoice == existing().poll.isMultipleChoice &&
-            incoming().poll.options.size() == existing().poll.options.size()
+            (!('votes' in existing().poll) || incoming().poll.votes.diff(existing().poll.votes).affectedKeys().hasOnly([request.auth.uid]))
           ) ||
+          // Confirmation de lecture : modification UNIQUEMENT de sa propre entrée readBy[request.auth.uid]
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['readBy']) &&
+            (!('readBy' in existing()) || incoming().readBy.diff(existing().readBy).affectedKeys().hasOnly([request.auth.uid]))
+          ) ||
+          // Signalement : ajout d'un signalement par soi-même
           (
             incoming().diff(existing()).affectedKeys().hasOnly(['reports']) &&
             (!('reports' in existing()) ||
@@ -299,7 +394,8 @@ service cloud.firestore {
           )
         );
 
-        allow delete: if isClassLeader(classId);
+        // Suppression : délégués (modération) OU l'auteur de son propre message
+        allow delete: if isClassLeader(classId) || (isClassMember(classId) && existing().senderId == request.auth.uid);
       }
     }
 

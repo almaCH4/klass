@@ -3,6 +3,7 @@ import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, 
 import { firestoreService } from '../services/firestoreService';
 import { auth } from '../firebase';
 import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signOut } from 'firebase/auth';
+import { deleteField } from 'firebase/firestore';
 import { parseFullIcsContent } from '../utils/icsParser';
 
 interface AppContextType {
@@ -330,11 +331,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updatePrivateNotes = async (notes: string): Promise<string> => {
     if (!currentUser) return '';
-    return 'Enregistré à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    try {
+      return await firestoreService.savePrivateNotes(currentUser.id, notes);
+    } catch (err: any) {
+      console.error('Erreur sauvegarde bloc-notes:', err);
+      throw err;
+    }
   };
 
   const getPrivateNotes = async () => {
-    return { text: '', lastSaved: '' };
+    if (!currentUser) return { text: '', lastSaved: '' };
+    try {
+      return await firestoreService.getPrivateNotes(currentUser.id);
+    } catch (err: any) {
+      console.error('Erreur chargement bloc-notes:', err);
+      return { text: '', lastSaved: '' };
+    }
   };
 
   const toggleHideCategory = async (category: string) => {
@@ -351,6 +363,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Class Management (Direct Firestore)
   const createClass = async (name: string, schoolName: string, academicYear?: string) => {
     if (!currentUser) return;
+    if (currentUser.classId) {
+      alert('Action impossible : vous êtes déjà membre d\'une classe.');
+      return;
+    }
+    if ((currentUser as any).createdClassId) {
+      alert('Action impossible : chaque compte ne peut créer qu\'une seule classe.');
+      return;
+    }
     const newClassId = 'c_' + Math.random().toString(36).substring(2, 9);
     const newClass: ClassInfo = {
       id: newClassId,
@@ -455,6 +475,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const removeMember = async (userId: string) => {
     if (!currentUser?.classId || !currentClass) return { success: false, message: 'Aucune classe active' };
     try {
+      const targetUser = members.find(m => m.id === userId) || await firestoreService.getUser(userId);
+
       const updatedDelegateIds = (currentClass.delegateIds || []).filter(id => id !== userId);
       const updatedDeputyIds = (currentClass.deputyIds || []).filter(id => id !== userId);
 
@@ -463,14 +485,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deputyIds: updatedDeputyIds
       });
 
-      await firestoreService.updateUser(userId, { classId: null, role: 'STUDENT', joinedWithInvitationId: undefined });
+      // Révocation définitive de l'invitation pour empêcher toute réinscription unilatérale
+      if (targetUser) {
+        await firestoreService.revokeMemberInvitations(currentClass.id, userId, targetUser.email);
+      }
+
+      await firestoreService.updateUser(userId, {
+        classId: null,
+        role: 'STUDENT',
+        joinedWithInvitationId: deleteField() as any
+      });
       await firestoreService.addAuditLog(currentUser.classId, {
         id: 'log_' + Date.now(),
         classId: currentUser.classId,
         authorName: currentUser.name,
         authorRole: 'Délégué(e) titulaire',
         action: 'Exclusion de classe',
-        details: 'Un membre a été retiré de la classe',
+        details: 'Un membre a été retiré de la classe et son invitation a été définitivement révoquée',
         timestamp: 'Aujourd\'hui à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
       });
       await refreshData();
@@ -486,19 +517,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const normalizedEmail = email.trim().toLowerCase();
     const invId = 'inv_' + Math.random().toString(36).substring(2, 8);
     const code = `KLASS-${currentUser.classId}-${invId}`;
-    const newInv: ClassInvitation & { targetRole?: string; isUsed?: boolean } = {
+    const newInv: ClassInvitation = {
       id: invId,
       classId: currentUser.classId,
       className: currentClass?.name || 'Classe',
       email: normalizedEmail,
       roleTarget: roleTarget || 'STUDENT',
-      targetRole: roleTarget || 'STUDENT',
       token: code,
       code,
-      invitedBy: currentUser.name,
+      invitedBy: currentUser.name || 'Délégué',
       createdAt: new Date().toISOString(),
-      status: 'PENDING',
-      isUsed: false
+      status: 'PENDING'
     };
 
     try {

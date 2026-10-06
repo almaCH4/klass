@@ -1,0 +1,101 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Récupère les données de profil Firestore
+    function getUserData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getClassData(classId) {
+      return firestore.get(/databases/(default)/documents/classes/$(classId)).data;
+    }
+
+    function isClassLeader(classId) {
+      return isVerified() && firestore.exists(/databases/(default)/documents/classes/$(classId)) && (
+        ('delegateIds' in getClassData(classId) && request.auth.uid in getClassData(classId).delegateIds) ||
+        ('deputyIds' in getClassData(classId) && request.auth.uid in getClassData(classId).deputyIds)
+      );
+    }
+
+    function isClassMember(classId) {
+      return isVerified() && (
+        getUserData().classId == classId ||
+        isClassLeader(classId)
+      );
+    }
+
+    function isNotMuted(classId) {
+      return !('mutedUserIds' in getClassData(classId)) ||
+             !(request.auth.uid in getClassData(classId).mutedUserIds);
+    }
+
+    // Validation du type de fichier (uniquement images et PDF)
+    function isValidFileType() {
+      return request.resource.contentType.matches('image/.*') ||
+             request.resource.contentType == 'application/pdf';
+    }
+
+    // Taille maximale autorisée : 10 Mo (10 * 1024 * 1024 octets)
+    function isValidFileSize() {
+      return request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    function isValidUpload() {
+      return isValidFileType() && isValidFileSize();
+    }
+
+    // 1. Fichiers du Chat de classe (images & documents partagés)
+    // Lecture : réservée aux membres de la classe
+    // Écriture : membre de la classe, non mis en sourdine, fichier valide
+    match /classes/{classId}/chat/{fileName} {
+      allow read: if isClassMember(classId);
+      allow write: if isClassMember(classId) && isNotMuted(classId) && isValidUpload();
+      allow delete: if isClassLeader(classId);
+    }
+
+    // 2. Fichiers de Rattrapage de cours (cours tapés, photos de tableau, PDF)
+    // Lecture : réservée aux membres de la classe
+    // Écriture : réservée aux délégués (titulaires ou suppléants)
+    match /classes/{classId}/catchup/{lessonId}/{fileName} {
+      allow read: if isClassMember(classId);
+      allow write: if isClassLeader(classId) && isValidUpload();
+      allow delete: if isClassLeader(classId);
+    }
+
+    // 3. Fichiers des Devoirs (consignes, documents joints Pronote, fiches PDF)
+    // Lecture : réservée aux membres de la classe
+    // Écriture : réservée aux délégués de la classe
+    match /classes/{classId}/homework/{homeworkId}/{fileName} {
+      allow read: if isClassMember(classId);
+      allow write: if isClassLeader(classId) && isValidUpload();
+      allow delete: if isClassLeader(classId);
+    }
+
+    // 4. Photos de profil / Avatars personnalisés des utilisateurs
+    // Lecture : utilisateurs connectés
+    // Écriture : propriétaire du compte uniquement, images uniquement, max 10 Mo
+    match /users/{userId}/avatar/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isVerified() && request.auth.uid == userId &&
+                      request.resource.contentType.matches('image/.*') &&
+                      isValidFileSize();
+      allow delete: if isVerified() && request.auth.uid == userId;
+    }
+
+    // Règle par défaut : interdire tout autre accès
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

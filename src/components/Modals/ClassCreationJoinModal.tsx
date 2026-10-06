@@ -146,8 +146,8 @@ export const ClassCreationJoinModal: React.FC = () => {
   // Le choix « Je suis délégué d'une classe » N'APPARAÎT PAS !
   // =========================================================================
   if (inviteToken) {
-    const roleTarget = inviteData?.invitation.roleTarget || (inviteData?.invitation as any)?.targetRole || 'STUDENT';
-    const roleLabel = roleTarget === 'DEPUTY' ? 'suppléant' : 'élève';
+    const roleTarget = inviteData?.invitation.roleTarget || 'STUDENT';
+    const roleLabel = roleTarget === 'DELEGATE' ? 'délégué titulaire' : roleTarget === 'DEPUTY' ? 'suppléant' : 'élève';
     const displayClassName = inviteData?.className || 'votre classe';
 
     const expectedEmail = (inviteData?.invitation.email || '').trim().toLowerCase();
