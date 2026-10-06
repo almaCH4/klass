@@ -93,6 +93,20 @@ export interface Course {
   createdAt?: string;
 }
 
+export interface CourseAttachment {
+  id: string;
+  courseId: string;
+  classId: string;
+  name: string;
+  type: string; // 'image/jpeg' | 'image/png' | 'application/pdf'
+  dataUrl?: string; // base64 string, max 700 Ko
+  externalUrl?: string; // lien externe optionnel si > 700 Ko
+  size: number; // Taille en octets (max 716800 octets / 700 Ko)
+  addedBy: string;
+  addedAt: string;
+  createdAt?: string;
+}
+
 export interface Homework {
   id: string;
   classId: string;

@@ -176,6 +176,20 @@ function toFirestoreFields(obj: Record<string, any>): Record<string, any> {
 }
 
 /**
+ * Vérifie qu'une URL est sécurisée en HTTPS et appartient au domaine index-education.net
+ */
+function isValidIndexEducationUrl(urlStr: string): boolean {
+  try {
+    const u = new URL(urlStr);
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return host === 'index-education.net' || host.endsWith('.index-education.net');
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Récupère le lien iCal enregistré pour une classe dans Firestore (classes/{classId}/settings/pronote)
  */
 async function getClassPronoteIcalUrl(
@@ -199,7 +213,11 @@ async function getClassPronoteIcalUrl(
 
     if (!res.ok) return null;
     const data: any = await res.json();
-    return data.fields?.icalUrl?.stringValue || null;
+    const link = data.fields?.icalUrl?.stringValue || null;
+    if (link && isValidIndexEducationUrl(link)) {
+      return link;
+    }
+    return null;
   } catch (err) {
     console.warn(`Erreur lecture lien iCal pour classe ${classId}:`, err);
     return null;
@@ -208,6 +226,7 @@ async function getClassPronoteIcalUrl(
 
 /**
  * Écrit les cours et met à jour les métadonnées de la classe dans Firestore via REST API
+ * Les devoirs sont rangés dans la sous-collection classes/{classId}/homework/{homeworkId}
  */
 async function writeScheduleToFirestore(
   classId: string,
@@ -232,10 +251,9 @@ async function writeScheduleToFirestore(
   const syncTimestamp = `Aujourd'hui à ${nowParis}`;
   const basePath = `projects/${projectId}/databases/${databaseId}/documents`;
 
-  // 1. Mettre à jour le document de la classe
+  // 1. Mettre à jour le document de la classe (SANS homeworkList pour respecter la limite de 1 Mo)
   const classDocPath = `${basePath}/classes/${classId}`;
   const classUpdates = {
-    homeworkList: parsedData.homework,
     lessonSessions: parsedData.sessions,
     availableGroups: parsedData.availableGroups,
     pronoteLastSynced: syncTimestamp,
@@ -244,7 +262,7 @@ async function writeScheduleToFirestore(
     pronoteSyncError: null
   };
 
-  await fetch(`${classDocPath}?updateMask.fieldPaths=homeworkList&updateMask.fieldPaths=lessonSessions&updateMask.fieldPaths=availableGroups&updateMask.fieldPaths=pronoteLastSynced&updateMask.fieldPaths=pronoteLastSyncedIso&updateMask.fieldPaths=pronoteSyncStatus&updateMask.fieldPaths=pronoteSyncError`, {
+  await fetch(`${classDocPath}?updateMask.fieldPaths=lessonSessions&updateMask.fieldPaths=availableGroups&updateMask.fieldPaths=pronoteLastSynced&updateMask.fieldPaths=pronoteLastSyncedIso&updateMask.fieldPaths=pronoteSyncStatus&updateMask.fieldPaths=pronoteSyncError`, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -255,7 +273,7 @@ async function writeScheduleToFirestore(
     })
   });
 
-  // 2. Écrire les cours par lots de 500 via documents:commit
+  // 2. Écrire les cours par lots de 250 via documents:commit
   const courses = parsedData.courses;
   const batchSize = 250;
   for (let i = 0; i < courses.length; i += batchSize) {
@@ -264,6 +282,27 @@ async function writeScheduleToFirestore(
       update: {
         name: `${basePath}/classes/${classId}/courses/${c.id}`,
         fields: toFirestoreFields(c)
+      }
+    }));
+
+    await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents:commit`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ writes })
+    });
+  }
+
+  // 3. Écrire les devoirs dans la sous-collection classes/{classId}/homework/{homeworkId}
+  const homeworkList = parsedData.homework || [];
+  for (let i = 0; i < homeworkList.length; i += batchSize) {
+    const chunk = homeworkList.slice(i, i + batchSize);
+    const writes = chunk.map((hw) => ({
+      update: {
+        name: `${basePath}/classes/${classId}/homework/${hw.id}`,
+        fields: toFirestoreFields(hw)
       }
     }));
 
@@ -575,26 +614,16 @@ async function handlePronoteSync(
 
   const effectiveClassId = requestedClassId || authResult.classId || 'default';
 
-  // 2. Résolution de l'URL iCal :
-  // Priorité 1: URL passée en paramètre direct (si délégué)
-  // Priorité 2: Document Firestore classes/{classId}/settings/pronote (réservé aux délégués)
-  // Priorité 3: Secret Cloudflare ICAL_URL
-  let icalUrl = customUrlParam?.trim();
+  // 2. Résolution STRICTEMENT sécurisée du lien iCal :
+  // Le worker ne doit lire le lien que dans classes/{classId}/settings/pronote, et n'accepter que des URL https sur des domaines index-education.net
+  let icalUrl = await getClassPronoteIcalUrl(effectiveClassId, env, authResult.token);
 
-  if (!icalUrl) {
-    icalUrl = (await getClassPronoteIcalUrl(effectiveClassId, env, authResult.token)) || undefined;
-  }
-
-  if (!icalUrl && env.ICAL_URL) {
-    icalUrl = env.ICAL_URL.trim();
-  }
-
-  if (!icalUrl || typeof icalUrl !== 'string') {
+  if (!icalUrl || typeof icalUrl !== 'string' || !isValidIndexEducationUrl(icalUrl)) {
     return new Response(
       JSON.stringify({
         success: false,
         error:
-          'Aucun lien iCal Pronote configuré pour cette classe. Un délégué doit coller le lien dans l\'espace Pronote ou configurer le secret ICAL_URL dans Cloudflare.'
+          'Aucun lien Pronote valide configuré pour cette classe (classes/' + effectiveClassId + '/settings/pronote). Le lien doit obligatoirement être en https:// et appartenir au domaine index-education.net.'
       }),
       {
         status: 400,

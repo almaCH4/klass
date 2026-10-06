@@ -93,6 +93,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [invitations, setInvitations] = useState<ClassInvitation[]>([]);
   const [members, setMembers] = useState<User[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
+  const [homework, setHomework] = useState<Homework[]>([]);
   
   const [activeTab, setActiveTab] = useState<ActiveTab>('timetable');
   const [themeMode, setThemeModeState] = useState<'light' | 'dark'>(() => {
@@ -122,7 +123,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isDeputy = currentUser?.role === 'DEPUTY';
   const isLeader = isDelegate || isDeputy;
 
-  const homework: Homework[] = currentClass?.homeworkList || [];
   const lessonSessions: LessonSession[] = currentClass?.lessonSessions || [];
   const availableGroups: string[] = currentClass?.availableGroups || [];
 
@@ -150,15 +150,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       if (currentUser.classId) {
         const isLeaderUser = currentUser.role === 'DELEGATE' || currentUser.role === 'DEPUTY';
-        const [classDoc, coursesDocs, logsDocs, personalDocs] = await Promise.all([
+        const [classDoc, coursesDocs, homeworkDocs, logsDocs, personalDocs] = await Promise.all([
           firestoreService.getClass(currentUser.classId),
           firestoreService.getCourses(currentUser.classId),
+          firestoreService.getHomeworkList(currentUser.classId),
           firestoreService.getAuditLogs(currentUser.classId),
           firestoreService.getPersonalEvents(currentUser.id)
         ]);
 
         if (classDoc) setCurrentClass(classDoc);
         if (coursesDocs) setCourses(coursesDocs);
+        if (homeworkDocs) setHomework(homeworkDocs);
         if (logsDocs) setAuditLogs(logsDocs);
         if (personalDocs) setPersonalEvents(personalDocs);
 

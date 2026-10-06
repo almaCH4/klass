@@ -42,8 +42,6 @@ export const PronoteSyncModal: React.FC = () => {
         if (!isMounted) return;
         if (settings?.icalUrl) {
           setIcalUrl(settings.icalUrl);
-        } else if (currentClass.pronoteIcalUrl) {
-          setIcalUrl(currentClass.pronoteIcalUrl);
         }
       })
       .catch((err) => {
@@ -58,7 +56,7 @@ export const PronoteSyncModal: React.FC = () => {
     };
   }, [currentClass?.id, isLeader]);
 
-  // Sauvegarder le lien iCal dans classes/{classId}/settings/pronote
+  // Sauvegarder le lien iCal UNIQUEMENT dans classes/{classId}/settings/pronote (protégé des élèves)
   const handleSaveUrl = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentClass?.id || !currentUser) return;
@@ -69,8 +67,20 @@ export const PronoteSyncModal: React.FC = () => {
       return;
     }
 
-    if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
-      setFeedback({ type: 'error', text: 'L\'URL doit commencer par https:// ou http://.' });
+    let isAllowedDomain = false;
+    try {
+      const parsedUrl = new URL(trimmedUrl);
+      const host = parsedUrl.hostname.toLowerCase();
+      isAllowedDomain = parsedUrl.protocol === 'https:' && (host === 'index-education.net' || host.endsWith('.index-education.net'));
+    } catch {
+      isAllowedDomain = false;
+    }
+
+    if (!isAllowedDomain) {
+      setFeedback({
+        type: 'error',
+        text: 'L\'URL doit obligatoirement être en https:// et provenir du domaine index-education.net.'
+      });
       return;
     }
 
@@ -78,13 +88,14 @@ export const PronoteSyncModal: React.FC = () => {
     setFeedback(null);
 
     try {
+      // 1. Enregistre uniquement dans classes/{classId}/settings/pronote
       await firestoreService.savePronoteSettings(currentClass.id, trimmedUrl, currentUser.name);
-      await firestoreService.updateClass(currentClass.id, {
-        pronoteIcalUrl: trimmedUrl
-      });
+      // 2. Efface tout champ pronoteIcalUrl existant dans le document de classe
+      await firestoreService.clearClassPronoteIcalUrl(currentClass.id);
+
       setFeedback({
         type: 'success',
-        text: 'Lien d\'abonnement iCal enregistré pour toute la classe. Il est protégé contre la lecture des élèves.'
+        text: 'Lien d\'abonnement iCal enregistré dans les paramètres privés des délégués. Le champ public a été effacé.'
       });
     } catch (err: any) {
       setFeedback({

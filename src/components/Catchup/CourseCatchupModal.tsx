@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Course } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { Course, CourseAttachment } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { compressImageToDataUrl } from '../../utils/imageCompressor';
+import { firestoreService } from '../../services/firestoreService';
 import {
   X,
   FileText,
@@ -20,7 +21,8 @@ import {
   AlertCircle,
   Eye,
   StickyNote,
-  BookOpen
+  BookOpen,
+  Download
 } from 'lucide-react';
 
 interface CourseCatchupModalProps {
@@ -42,23 +44,39 @@ export const CourseCatchupModal: React.FC<CourseCatchupModalProps> = ({
   const [links, setLinks] = useState<{ title: string; url: string }[]>([]);
   const [newLinkTitle, setNewLinkTitle] = useState('');
   const [newLinkUrl, setNewLinkUrl] = useState('');
-  const [images, setImages] = useState<{ id: string; name: string; dataUrl: string; addedBy?: string; addedAt?: string }[]>([]);
-  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [attachments, setAttachments] = useState<CourseAttachment[]>([]);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
-  // Sync state when course changes
-  React.useEffect(() => {
-    if (course) {
-      setLessonSummary(course.catchupData?.lessonSummary || '');
-      setAdviceNote(course.catchupData?.adviceNote || course.delegateNote?.text || '');
-      setLinks(course.catchupData?.links || []);
-      setImages(course.catchupData?.images || []);
-      setIsEditing(false);
-      setNewLinkTitle('');
-      setNewLinkUrl('');
-    }
+  // Charger les pièces jointes depuis la sous-collection dédiée classes/{classId}/courses/{courseId}/attachments
+  useEffect(() => {
+    if (!course?.id || !course?.classId) return;
+
+    setLessonSummary(course.catchupData?.lessonSummary || '');
+    setAdviceNote(course.catchupData?.adviceNote || course.delegateNote?.text || '');
+    setLinks(course.catchupData?.links || []);
+    setIsEditing(false);
+    setNewLinkTitle('');
+    setNewLinkUrl('');
+    setUploadError(null);
+
+    let isMounted = true;
+    firestoreService
+      .getCourseAttachments(course.classId, course.id)
+      .then((docs) => {
+        if (!isMounted) return;
+        setAttachments(docs);
+      })
+      .catch((err) => {
+        console.error('Erreur chargement pièces jointes rattrapage:', err);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, [course]);
 
   if (!isOpen || !course) return null;
@@ -99,45 +117,91 @@ export const CourseCatchupModal: React.FC<CourseCatchupModalProps> = ({
     setLinks(links.filter((_, i) => i !== index));
   };
 
-  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !course?.id || !course?.classId) return;
 
-    if (images.length >= 4) {
-      alert('Vous pouvez ajouter au maximum 4 photos par cours pour respecter la limite de taille.');
-      return;
-    }
+    setUploadError(null);
+    setIsUploadingFile(true);
 
     try {
-      setIsUploadingImage(true);
-      const compressedDataUrl = await compressImageToDataUrl(file, 450);
-      const newImg = {
-        id: 'img_' + Math.random().toString(36).substring(2, 8),
-        name: file.name.substring(0, 30),
-        dataUrl: compressedDataUrl,
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      const isImg = file.type.startsWith('image/');
+
+      if (!isPdf && !isImg) {
+        setUploadError('Format non pris en charge. Veuillez choisir une image (JPEG, PNG) ou un PDF, ou ajouter un lien externe.');
+        return;
+      }
+
+      // Limite stricte de 700 Ko (716 800 octets) par document Firestore
+      const MAX_SIZE_BYTES = 700 * 1024;
+
+      let finalDataUrl = '';
+      let calculatedSize = file.size;
+
+      if (isImg) {
+        // Compression automatique sous 600 Ko
+        finalDataUrl = await compressImageToDataUrl(file, 600);
+        calculatedSize = Math.round(finalDataUrl.length * 0.75);
+        if (calculatedSize > MAX_SIZE_BYTES) {
+          setUploadError(`Cette image dépasse 700 Ko (${Math.round(calculatedSize / 1024)} Ko après compression). Veuillez utiliser un lien externe ci-dessous (Google Drive, OneDrive...) pour la partager.`);
+          return;
+        }
+      } else if (isPdf) {
+        if (file.size > MAX_SIZE_BYTES) {
+          setUploadError(`Ce fichier PDF dépasse 700 Ko (${Math.round(file.size / 1024)} Ko). Veuillez utiliser un lien externe ci-dessous (Google Drive, OneDrive...) pour le partager.`);
+          return;
+        }
+        finalDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error('Erreur de lecture du PDF'));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      const attId = 'att_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const newAttachment: CourseAttachment = {
+        id: attId,
+        courseId: course.id,
+        classId: course.classId,
+        name: file.name.substring(0, 100),
+        type: isPdf ? 'application/pdf' : (file.type || 'image/jpeg'),
+        dataUrl: finalDataUrl,
+        size: calculatedSize,
         addedBy: currentUser?.name || 'Délégué',
-        addedAt: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+        addedAt: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+        createdAt: new Date().toISOString()
       };
-      setImages(prev => [...prev, newImg]);
+
+      await firestoreService.addCourseAttachment(course.classId, course.id, newAttachment);
+      setAttachments(prev => [...prev, newAttachment]);
     } catch (err: any) {
-      alert("Impossible de compresser l'image : " + (err.message || 'erreur inconnue'));
+      console.error('Erreur téléversement pièce jointe:', err);
+      setUploadError(err.message || 'Impossible d\'ajouter le fichier.');
     } finally {
-      setIsUploadingImage(false);
+      setIsUploadingFile(false);
       e.target.value = '';
     }
   };
 
-  const handleRemoveImage = (imgId: string) => {
-    setImages(images.filter(img => img.id !== imgId));
+  const handleRemoveAttachment = async (attId: string) => {
+    if (!course?.id || !course?.classId) return;
+    try {
+      await firestoreService.deleteCourseAttachment(course.classId, course.id, attId);
+      setAttachments(prev => prev.filter(a => a.id !== attId));
+    } catch (err: any) {
+      alert('Erreur lors de la suppression : ' + (err.message || 'erreur inconnue'));
+    }
   };
 
   const handleSave = async () => {
     setIsSaving(true);
+    // On n'enregistre AUCUNE image lourde dans le document du cours pour respecter la limite de 1 Mo
     const updatedCatchupData = {
       lessonSummary: lessonSummary.trim() || undefined,
       adviceNote: adviceNote.trim() || undefined,
       links: links.length > 0 ? links : undefined,
-      images: images.length > 0 ? images : undefined,
       updatedAt: 'Aujourd\'hui à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
       updatedBy: currentUser?.name || 'Délégué'
     };
@@ -377,45 +441,72 @@ export const CourseCatchupModal: React.FC<CourseCatchupModalProps> = ({
                 </div>
               </div>
 
-              {/* Photos de tableau / fiches de cours */}
+              {/* Documents & Photos de rattrapage (sous-collection dédiée <= 700 Ko) */}
               <div className="space-y-2 pt-2 border-t border-sky-200 dark:border-sky-900/60">
-                <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
-                  Photos du tableau ou fiches manuscrites (compressées automatiquement &lt; 500 Ko) :
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                    Documents de cours & Photos du tableau (max 700 Ko par fichier) :
+                  </label>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                    {attachments.length} fichier(s) joint(s)
+                  </span>
+                </div>
 
-                {images.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {images.map((img) => (
-                      <div key={img.id} className="relative group rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 aspect-video bg-slate-100 dark:bg-slate-800">
-                        <img src={img.dataUrl} alt={img.name} className="w-full h-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveImage(img.id)}
-                          className="absolute top-1 right-1 p-1 rounded-full bg-rose-600 text-white shadow-md hover:bg-rose-700"
-                          title="Supprimer la photo"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
+                {uploadError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 text-xs text-rose-700 dark:text-rose-300 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                    <div>{uploadError}</div>
                   </div>
                 )}
 
-                {images.length < 4 && (
+                {attachments.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {attachments.map((att) => {
+                      const isPdf = att.type === 'application/pdf' || att.name.toLowerCase().endsWith('.pdf');
+                      return (
+                        <div key={att.id} className="flex items-center justify-between p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#1A2026] text-xs">
+                          <div className="flex items-center space-x-2 min-w-0 flex-1 mr-2">
+                            {isPdf ? (
+                              <FileText className="w-5 h-5 text-rose-600 shrink-0" />
+                            ) : (
+                              <img src={att.dataUrl} alt={att.name} className="w-8 h-8 rounded-lg object-cover shrink-0 border" />
+                            )}
+                            <div className="min-w-0">
+                              <p className="font-bold text-slate-900 dark:text-white truncate text-[11px]">{att.name}</p>
+                              <p className="text-[10px] text-slate-400">
+                                {Math.round((att.size || 0) / 1024)} Ko • {att.addedBy}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveAttachment(att.id)}
+                            className="p-1 rounded-lg text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 shrink-0"
+                            title="Supprimer la pièce jointe"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <label className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-bold bg-white dark:bg-[#1A2026] border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 cursor-pointer shadow-2xs">
                     <ImageIcon className="w-4 h-4 text-[#234E70] dark:text-sky-400" />
-                    <span>{isUploadingImage ? 'Compression en cours...' : '+ Importer une photo (tableau, schéma)'}</span>
+                    <span>{isUploadingFile ? 'Téléversement en cours...' : '+ Ajouter une photo ou un PDF (max 700 Ko)'}</span>
                     <input
                       type="file"
-                      accept="image/*"
-                      onChange={handleImageFileChange}
-                      disabled={isUploadingImage}
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      onChange={handleFileUpload}
+                      disabled={isUploadingFile}
                       className="hidden"
                     />
                   </label>
-                )}
+                </div>
                 <p className="text-[10px] text-slate-400">
-                  Images compressées côté client et stockées gratuitement dans Firestore (max 4 photos).
+                  Chaque document est stocké dans sa propre fiche Firestore (700 Ko max). Pour des fichiers plus volumineux, insérez un lien externe Google Drive ci-dessus.
                 </p>
               </div>
 
@@ -476,7 +567,7 @@ export const CourseCatchupModal: React.FC<CourseCatchupModalProps> = ({
               {course.catchupData?.links && course.catchupData.links.length > 0 && (
                 <div>
                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Liens utiles & Ressources :
+                    Liens utiles & Ressources externes :
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {course.catchupData.links.map((link, i) => (
@@ -495,27 +586,58 @@ export const CourseCatchupModal: React.FC<CourseCatchupModalProps> = ({
                 </div>
               )}
 
-              {/* Photos de tableau / fiches */}
-              {course.catchupData?.images && course.catchupData.images.length > 0 && (
-                <div>
+              {/* Pièces jointes (Photos & PDF dans la sous-collection) */}
+              {attachments.length > 0 && (
+                <div className="space-y-2">
                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                    Photos du tableau / Schémas :
+                    Documents & Photos de cours ({attachments.length}) :
                   </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {course.catchupData.images.map((img) => (
-                      <div
-                        key={img.id}
-                        onClick={() => setLightboxImage(img.dataUrl)}
-                        className="relative group rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 aspect-video bg-slate-100 dark:bg-slate-800 cursor-pointer shadow-2xs hover:scale-105 transition-transform"
-                      >
-                        <img src={img.dataUrl} alt={img.name} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-xs font-bold">
-                          <Eye className="w-4 h-4 mr-1" />
-                          <span>Agrandir</span>
+                  
+                  {/* Grille photos */}
+                  {attachments.filter(a => a.type.startsWith('image/')).length > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-2">
+                      {attachments.filter(a => a.type.startsWith('image/')).map((img) => (
+                        <div
+                          key={img.id}
+                          onClick={() => img.dataUrl && setLightboxImage(img.dataUrl)}
+                          className="relative group rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 aspect-video bg-slate-100 dark:bg-slate-800 cursor-pointer shadow-2xs hover:scale-105 transition-transform"
+                        >
+                          {img.dataUrl && <img src={img.dataUrl} alt={img.name} className="w-full h-full object-cover" />}
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white text-xs font-bold">
+                            <Eye className="w-4 h-4 mr-1" />
+                            <span>Agrandir</span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Liste PDF */}
+                  {attachments.filter(a => a.type === 'application/pdf' || a.name.toLowerCase().endsWith('.pdf')).length > 0 && (
+                    <div className="space-y-1.5">
+                      {attachments.filter(a => a.type === 'application/pdf' || a.name.toLowerCase().endsWith('.pdf')).map((pdf) => (
+                        <div key={pdf.id} className="flex items-center justify-between p-2 rounded-xl bg-white dark:bg-[#1A2026] border border-slate-200 dark:border-slate-700 text-xs">
+                          <div className="flex items-center space-x-2 min-w-0">
+                            <FileText className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span className="font-bold text-slate-800 dark:text-slate-200 truncate text-[11px]">{pdf.name}</span>
+                            <span className="text-[10px] text-slate-400 shrink-0">({Math.round((pdf.size || 0) / 1024)} Ko)</span>
+                          </div>
+                          {pdf.dataUrl && (
+                            <a
+                              href={pdf.dataUrl}
+                              download={pdf.name}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-[#234E70] dark:text-sky-400 hover:bg-slate-200"
+                            >
+                              <Download className="w-3 h-3 mr-1" />
+                              Ouvrir
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

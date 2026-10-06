@@ -9,11 +9,12 @@ import {
   query,
   where,
   writeBatch,
-  runTransaction
+  runTransaction,
+  deleteField
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../utils/firestoreError';
-import { User, ClassInfo, Course, PersonalEvent, ClassInvitation, AuditLogItem, UserRole, ChatMessage, ChatPoll } from '../types';
+import { User, ClassInfo, Course, CourseAttachment, Homework, PersonalEvent, ClassInvitation, AuditLogItem, UserRole, ChatMessage, ChatPoll } from '../types';
 
 /**
  * Nettoie récursivement les objets pour Firestore en supprimant toute valeur 'undefined'
@@ -161,6 +162,133 @@ export class FirestoreService {
     }
   }
 
+  async clearClassPronoteIcalUrl(classId: string): Promise<void> {
+    const path = `classes/${classId}`;
+    try {
+      await updateDoc(doc(db, 'classes', classId), {
+        pronoteIcalUrl: deleteField()
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // HOMEWORK (Subcollection under /classes/{classId}/homework)
+  // Stockage dédié pour éviter la limite de 1 Mo du document de classe
+  // -------------------------------------------------------------
+  async getHomeworkList(classId: string): Promise<Homework[]> {
+    const path = `classes/${classId}/homework`;
+    try {
+      const snap = await getDocs(collection(db, 'classes', classId, 'homework'));
+      let list = snap.docs.map(d => d.data() as Homework);
+
+      // Migration automatique des devoirs existants si la sous-collection est vide
+      if (list.length === 0) {
+        const classSnap = await getDoc(doc(db, 'classes', classId));
+        if (classSnap.exists()) {
+          const classData = classSnap.data() as ClassInfo;
+          if (classData.homeworkList && Array.isArray(classData.homeworkList) && classData.homeworkList.length > 0) {
+            const batch = writeBatch(db);
+            for (const hw of classData.homeworkList) {
+              const hwRef = doc(db, 'classes', classId, 'homework', hw.id);
+              batch.set(hwRef, cleanFirestoreData(hw));
+            }
+            batch.update(doc(db, 'classes', classId), {
+              homeworkList: deleteField()
+            });
+            await batch.commit();
+            list = classData.homeworkList;
+          }
+        }
+      }
+      return list;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, path);
+      return [];
+    }
+  }
+
+  async setHomework(classId: string, hw: Homework): Promise<void> {
+    const path = `classes/${classId}/homework/${hw.id}`;
+    try {
+      await setDoc(doc(db, 'classes', classId, 'homework', hw.id), cleanFirestoreData(hw));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  }
+
+  async updateHomework(classId: string, homeworkId: string, updates: Partial<Homework>): Promise<void> {
+    const path = `classes/${classId}/homework/${homeworkId}`;
+    try {
+      await updateDoc(doc(db, 'classes', classId, 'homework', homeworkId), cleanFirestoreData(updates));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  }
+
+  async deleteHomework(classId: string, homeworkId: string): Promise<void> {
+    const path = `classes/${classId}/homework/${homeworkId}`;
+    try {
+      await deleteDoc(doc(db, 'classes', classId, 'homework', homeworkId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  }
+
+  async batchReplaceHomework(classId: string, homeworkItems: Homework[]): Promise<void> {
+    const path = `classes/${classId}/homework`;
+    try {
+      const existingSnap = await getDocs(collection(db, 'classes', classId, 'homework'));
+      const batch = writeBatch(db);
+      for (const d of existingSnap.docs) {
+        batch.delete(d.ref);
+      }
+      for (const hw of homeworkItems) {
+        batch.set(doc(db, 'classes', classId, 'homework', hw.id), cleanFirestoreData(hw));
+      }
+      batch.update(doc(db, 'classes', classId), {
+        homeworkList: deleteField()
+      });
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // COURSE ATTACHMENTS (Subcollection under /classes/{classId}/courses/{courseId}/attachments)
+  // Stockage individuel (max 700 Ko par document) : images JPEG/PNG et PDF légers
+  // -------------------------------------------------------------
+  async getCourseAttachments(classId: string, courseId: string): Promise<CourseAttachment[]> {
+    const path = `classes/${classId}/courses/${courseId}/attachments`;
+    try {
+      const snap = await getDocs(collection(db, 'classes', classId, 'courses', courseId, 'attachments'));
+      return snap.docs.map(d => d.data() as CourseAttachment);
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, path);
+      return [];
+    }
+  }
+
+  async addCourseAttachment(classId: string, courseId: string, attachment: CourseAttachment): Promise<void> {
+    const path = `classes/${classId}/courses/${courseId}/attachments/${attachment.id}`;
+    try {
+      await setDoc(doc(db, 'classes', classId, 'courses', courseId, 'attachments', attachment.id), cleanFirestoreData(attachment));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
+    }
+  }
+
+  async deleteCourseAttachment(classId: string, courseId: string, attachmentId: string): Promise<void> {
+    const path = `classes/${classId}/courses/${courseId}/attachments/${attachmentId}`;
+    try {
+      await deleteDoc(doc(db, 'classes', classId, 'courses', courseId, 'attachments', attachmentId));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, path);
+    }
+  }
+
   // -------------------------------------------------------------
   // COURSES (Subcollection under /classes/{classId}/courses)
   // -------------------------------------------------------------
@@ -273,6 +401,69 @@ export class FirestoreService {
       }
     } catch (err) {
       console.error('Erreur lors de la révocation des invitations du membre exclu:', err);
+    }
+  }
+
+  /**
+   * Rétrograder ou retirer un délégué ou un suppléant dans une seule transaction Firestore atomique.
+   * - Retire targetUserId de delegateIds et deputyIds
+   * - Remet le rôle à STUDENT (et classId à null si exclusion)
+   * - Révoque l'invitation associée
+   */
+  async demoteOrRemoveMemberTransaction(
+    classId: string,
+    targetUserId: string,
+    action: 'demote' | 'remove',
+    invitationId?: string | null
+  ): Promise<void> {
+    const classRef = doc(db, 'classes', classId);
+    const userRef = doc(db, 'users', targetUserId);
+
+    try {
+      await runTransaction(db, async (tx) => {
+        const classSnap = await tx.get(classRef);
+        const userSnap = await tx.get(userRef);
+
+        if (!classSnap.exists() || !userSnap.exists()) {
+          throw new Error('[transaction/not-found] Classe ou utilisateur introuvable.');
+        }
+
+        const classData = classSnap.data() as ClassInfo;
+        const userData = userSnap.data() as User;
+
+        const updatedDelegateIds = (classData.delegateIds || []).filter(id => id !== targetUserId);
+        const updatedDeputyIds = (classData.deputyIds || []).filter(id => id !== targetUserId);
+
+        tx.update(classRef, cleanFirestoreData({
+          delegateIds: updatedDelegateIds,
+          deputyIds: updatedDeputyIds
+        }));
+
+        if (action === 'demote') {
+          tx.update(userRef, cleanFirestoreData({
+            role: 'STUDENT'
+          }));
+        } else {
+          // action === 'remove' : exclusion définitive
+          tx.update(userRef, {
+            role: 'STUDENT',
+            classId: null,
+            joinedWithInvitationId: deleteField()
+          });
+        }
+
+        const targetInvId = invitationId || userData.joinedWithInvitationId;
+        if (targetInvId) {
+          const invRef = doc(db, 'classes', classId, 'invitations', targetInvId);
+          tx.update(invRef, cleanFirestoreData({
+            status: 'REVOKED',
+            isRevoked: true
+          }));
+        }
+      });
+    } catch (err: any) {
+      console.error('Erreur transaction demote/remove:', err);
+      handleFirestoreError(err, OperationType.UPDATE, `classes/${classId}/members/${targetUserId}`);
     }
   }
 
