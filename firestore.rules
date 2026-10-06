@@ -264,6 +264,12 @@ service cloud.firestore {
         allow update, delete: if false; // Audit logs are immutable
       }
 
+      // Configuration privée de la classe (ex: lien d'abonnement iCal Pronote)
+      // Strictement réservée aux délégués de la classe, jamais accessible par les élèves
+      match /settings/{settingId} {
+        allow read, write: if isClassLeader(classId);
+      }
+
       // Chat Messages subcollection (Groupe de classe)
       // Règle 5 : senderName == profil. Sondages : options/questions inchangées. Réactions/signalements protégés.
       match /messages/{messageId} {

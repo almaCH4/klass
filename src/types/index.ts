@@ -31,6 +31,8 @@ export interface ClassInfo {
   deputyIds: string[];   // max 2 suppléants
   pronoteIcalUrl?: string;
   pronoteLastSynced?: string;
+  pronoteLastSyncedIso?: string;
+  pronoteLastSyncAttempt?: string;
   pronoteSyncStatus?: 'idle' | 'syncing' | 'success' | 'error';
   pronoteSyncError?: string;
   homeworkList?: Homework[];

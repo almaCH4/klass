@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Upload,
   CheckCircle2,
+  AlertCircle,
   Clock,
   SlidersHorizontal,
   ChevronDown
@@ -26,6 +27,7 @@ export const Timetable: React.FC = () => {
     currentClass,
     isLeader,
     openModal,
+    refreshData,
     syncPronoteIcal
   } = useApp();
 
@@ -53,7 +55,43 @@ export const Timetable: React.FC = () => {
   const [selectedDay, setSelectedDay] = useState<number>(() => getInitialState().selectedDay);
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isReloading, setIsReloading] = useState<boolean>(false);
   const [syncFeedback, setSyncFeedback] = useState<{ message: string; success: boolean } | null>(null);
+
+  // Calcul du temps écoulé depuis la dernière synchronisation
+  const getSyncMinutesAgoText = (lastSynced?: string, iso?: string): string => {
+    if (iso) {
+      const diffMs = Date.now() - new Date(iso).getTime();
+      const diffMin = Math.max(0, Math.floor(diffMs / 60000));
+      if (diffMin < 1) return "à l'instant";
+      if (diffMin === 1) return "il y a 1 min";
+      if (diffMin < 60) return `il y a ${diffMin} min`;
+      const diffHours = Math.floor(diffMin / 60);
+      if (diffHours === 1) return "il y a 1 h";
+      if (diffHours < 24) return `il y a ${diffHours} h`;
+      return `il y a ${Math.floor(diffHours / 24)} j`;
+    }
+    if (lastSynced) {
+      if (lastSynced.includes('à')) {
+        return `il y a quelques min (${lastSynced.split('à')[1]?.trim() || ''})`;
+      }
+      return lastSynced;
+    }
+    return "à l'instant";
+  };
+
+  const handleStudentReload = async () => {
+    setIsReloading(true);
+    try {
+      await refreshData();
+      setSyncFeedback({ message: 'Emploi du temps actualisé avec succès.', success: true });
+    } catch {
+      setSyncFeedback({ message: 'Erreur lors du rafraîchissement.', success: false });
+    } finally {
+      setIsReloading(false);
+      setTimeout(() => setSyncFeedback(null), 3000);
+    }
+  };
 
   // Compute dates for the displayed week (Lundi à Vendredi)
   const weekDays = useMemo(() => {
@@ -247,29 +285,9 @@ export const Timetable: React.FC = () => {
 
             {/* Badges & Sync row */}
             <div className="flex items-center flex-wrap gap-2 pt-1">
-              {currentClass?.pronoteLastSynced ? (
-                <button
-                  type="button"
-                  onClick={() => openModal('pronoteSync')}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/80 hover:bg-emerald-100 transition-colors"
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>Pronote synchronisé</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => openModal('pronoteSync')}
-                  className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 dark:bg-amber-950/50 dark:text-amber-300 border border-amber-200 dark:border-amber-800/80 hover:bg-amber-100 transition-colors"
-                >
-                  <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  <span>Pronote : Non importé</span>
-                </button>
-              )}
-
-              {/* Délégué controls */}
-              {isLeader && (
-                <div className="flex items-center space-x-2">
+              {isLeader ? (
+                /* Controles Délégué */
+                <div className="flex items-center flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={handleSyncClick}
@@ -280,13 +298,50 @@ export const Timetable: React.FC = () => {
                     {isSyncing ? 'Synchronisation...' : 'Synchroniser maintenant'}
                   </button>
 
-                  {currentClass?.pronoteLastSynced && (
-                    <span className="text-xs text-slate-600 dark:text-slate-300 font-semibold bg-slate-100 dark:bg-slate-800/80 px-2.5 py-0.5 rounded-full">
-                      {currentClass.pronoteLastSynced.includes('à')
-                        ? `Dernière synchro à ${currentClass.pronoteLastSynced.split('à')[1]?.trim() || ''}`
-                        : `Dernière synchro : ${currentClass.pronoteLastSynced}`}
-                    </span>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => openModal('pronoteSync')}
+                    className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                      currentClass?.pronoteSyncStatus === 'error'
+                        ? 'bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border-rose-200 dark:border-rose-800 hover:bg-rose-100'
+                        : 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
+                    }`}
+                  >
+                    {currentClass?.pronoteSyncStatus === 'error' ? (
+                      <>
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Journal d'erreurs</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>Lien iCal & Journal</span>
+                      </>
+                    )}
+                  </button>
+
+                  <span className="text-xs text-slate-600 dark:text-slate-300 font-semibold bg-slate-100 dark:bg-slate-800/80 px-2.5 py-0.5 rounded-full">
+                    Dernière synchro : {getSyncMinutesAgoText(currentClass?.pronoteLastSynced, currentClass?.pronoteLastSyncedIso)}
+                  </span>
+                </div>
+              ) : (
+                /* Controles Élèves (aucune action d'import, rechargement simple et statut clair) */
+                <div className="flex items-center flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleStudentReload}
+                    disabled={isReloading}
+                    className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shadow-xs active:scale-95 disabled:opacity-60"
+                    title="Actualiser les cours"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isReloading ? 'animate-spin' : ''}`} />
+                    <span>Actualiser</span>
+                  </button>
+
+                  <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/80">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>À jour – dernière synchronisation {getSyncMinutesAgoText(currentClass?.pronoteLastSynced, currentClass?.pronoteLastSyncedIso)}</span>
+                  </span>
                 </div>
               )}
 

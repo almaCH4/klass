@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 
 export const ClassCreationJoinModal: React.FC = () => {
-  const { createClass, joinClassWithInvite, currentUser, logout } = useApp();
+  const { createClass, joinClassWithInvite, currentUser, logout, isLoading, closeModal } = useApp();
 
   // Check URL or session storage for ?invite=
   const [inviteToken, setInviteToken] = useState<string | null>(() => {
@@ -35,7 +35,7 @@ export const ClassCreationJoinModal: React.FC = () => {
   const [manualToken, setManualToken] = useState('');
   const [className, setClassName] = useState('');
   const [schoolName, setSchoolName] = useState('');
-  const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
+  const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; text: string; code?: string } | null>(null);
 
   // States for invite verification
   const [isVerifyingInvite, setIsVerifyingInvite] = useState(false);
@@ -44,12 +44,18 @@ export const ClassCreationJoinModal: React.FC = () => {
     className: string;
     classId: string;
   } | null>(null);
-  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<{ message: string; code?: string } | null>(null);
   const [isJoining, setIsJoining] = useState(false);
 
-  // Fetch invitation details if token is present
+  // Fetch invitation details ONLY after Firebase Auth state is completely loaded and user is authenticated
   useEffect(() => {
     if (!inviteToken) return;
+
+    // Attendre que l'état d'authentification Firebase soit résolu
+    if (isLoading) return;
+
+    // Si aucun utilisateur n'est connecté, ne pas tenter de lire l'invitation (les règles Firestore exigent l'authentification)
+    if (!currentUser) return;
 
     let isMounted = true;
     setIsVerifyingInvite(true);
@@ -63,7 +69,13 @@ export const ClassCreationJoinModal: React.FC = () => {
       })
       .catch((err: any) => {
         if (!isMounted) return;
-        setInviteError(err.message || 'Invitation introuvable ou expirée.');
+        console.error('Erreur lecture invitation dans modal:', err);
+        const code = err.code || err.message?.match(/\[(.*?)\]/)?.[1] || 'invitation/error';
+        const cleanMsg = err.message?.replace(/\[.*?\]\s*/, '') || 'Invitation introuvable ou expirée.';
+        setInviteError({
+          message: cleanMsg,
+          code
+        });
       })
       .finally(() => {
         if (isMounted) setIsVerifyingInvite(false);
@@ -72,7 +84,7 @@ export const ClassCreationJoinModal: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [inviteToken]);
+  }, [inviteToken, isLoading, currentUser]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -103,6 +115,7 @@ export const ClassCreationJoinModal: React.FC = () => {
     if (!inviteToken) return;
 
     setIsJoining(true);
+    setFeedback(null);
     const res = await joinClassWithInvite(inviteToken);
     setIsJoining(false);
 
@@ -113,8 +126,18 @@ export const ClassCreationJoinModal: React.FC = () => {
         window.history.replaceState({}, '', window.location.pathname);
       }
     } else {
-      setFeedback({ type: 'error', text: res.message });
+      const code = res.message?.match(/\[(.*?)\]/)?.[1] || 'join/error';
+      setFeedback({ type: 'error', text: res.message, code });
     }
+  };
+
+  // Entrer directement dans la classe si l'utilisateur en est déjà membre
+  const handleEnterClassDirectly = () => {
+    sessionStorage.removeItem('klass_pending_invite');
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    closeModal();
   };
 
   // =========================================================================
@@ -131,6 +154,12 @@ export const ClassCreationJoinModal: React.FC = () => {
     const currentGoogleEmail = (currentUser?.email || '').trim().toLowerCase();
     const isEmailMatching = expectedEmail ? expectedEmail === currentGoogleEmail : true;
 
+    // Détection si l'invitation a déjà été utilisée
+    const isInvitationAccepted = inviteData?.invitation.status === 'ACCEPTED' || (inviteData?.invitation as any)?.isUsed;
+    const isUsedByThisUser = (inviteData?.invitation as any)?.usedBy === currentUser?.id || (expectedEmail && expectedEmail === currentGoogleEmail);
+    const isUserAlreadyInClass = currentUser?.classId === inviteData?.classId;
+    const isAlreadyMember = isUserAlreadyInClass || (isInvitationAccepted && isUsedByThisUser);
+
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-sm animate-in fade-in duration-150">
         <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden p-6 sm:p-8 space-y-6">
@@ -141,11 +170,11 @@ export const ClassCreationJoinModal: React.FC = () => {
               <School className="w-7 h-7" />
             </div>
 
-            {isVerifyingInvite ? (
+            {isLoading || isVerifyingInvite ? (
               <div className="py-6 flex flex-col items-center space-y-3">
                 <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
                 <p className="text-xs text-slate-500 font-semibold">
-                  Vérification de votre invitation en cours...
+                  {isLoading ? 'Vérification de votre compte Google...' : 'Vérification de votre invitation en cours...'}
                 </p>
               </div>
             ) : inviteError ? (
@@ -153,8 +182,13 @@ export const ClassCreationJoinModal: React.FC = () => {
                 <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
                   Invitation inaccessible
                 </h2>
-                <div className="p-3.5 rounded-2xl bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-900 text-xs">
-                  {inviteError}
+                <div className="p-3.5 rounded-2xl bg-rose-50 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200 dark:border-rose-900 text-xs space-y-1">
+                  <p>{inviteError.message}</p>
+                  {inviteError.code && (
+                    <p className="font-mono text-[10px] bg-rose-100 dark:bg-rose-900/60 px-1.5 py-0.5 rounded text-rose-700 dark:text-rose-300 inline-block">
+                      Code : {inviteError.code}
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -175,16 +209,22 @@ export const ClassCreationJoinModal: React.FC = () => {
               <div>
                 {/* Titre imposé : "Rejoindre la classe [nom] en tant qu'[élève ou suppléant]" */}
                 <h2 className="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight leading-snug">
-                  Rejoindre la classe <span className="text-blue-600 dark:text-blue-400">{displayClassName}</span> en tant qu'<span className="capitalize">{roleLabel}</span>
+                  {isAlreadyMember ? (
+                    <>Vous êtes membre de la classe <span className="text-blue-600 dark:text-blue-400">{displayClassName}</span></>
+                  ) : (
+                    <>Rejoindre la classe <span className="text-blue-600 dark:text-blue-400">{displayClassName}</span> en tant qu'<span className="capitalize">{roleLabel}</span></>
+                  )}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Invitation officielle émise par les délégués de votre classe.
+                  {isAlreadyMember
+                    ? 'Votre adhésion est confirmée. Vous pouvez accéder directement à votre espace.'
+                    : 'Invitation officielle émise par les délégués de votre classe.'}
                 </p>
               </div>
             )}
           </div>
 
-          {!isVerifyingInvite && !inviteError && (
+          {!isLoading && !isVerifyingInvite && !inviteError && (
             <div className="space-y-5">
               
               {/* Rôle imposé et non modifiable */}
@@ -203,9 +243,55 @@ export const ClassCreationJoinModal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Vérification de l'e-mail du compte Google connecté */}
-              {expectedEmail && !isEmailMatching ? (
-                /* ÉCHEC : L'e-mail ne correspond pas */
+              {/* Cas A : L'utilisateur est DÉJÀ membre de la classe grâce à cette invitation (même e-mail) */}
+              {isAlreadyMember ? (
+                <div className="space-y-4">
+                  <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-800 dark:text-emerald-300 flex items-start space-x-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold">Adhésion déjà active</p>
+                      <p className="text-[11px] mt-0.5">
+                        Vous avez déjà rejoint la classe avec l'adresse <strong>{currentGoogleEmail}</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleEnterClassDirectly}
+                    className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-md transition-transform active:scale-95 flex items-center justify-center space-x-2"
+                  >
+                    <span>Entrer dans la classe {displayClassName}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : isInvitationAccepted && !isUsedByThisUser ? (
+                /* Cas B : L'invitation a été utilisée par une AUTRE adresse e-mail */
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-xs space-y-2">
+                    <div className="flex items-center space-x-2 text-rose-900 dark:text-rose-200 font-extrabold">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>Invitation déjà utilisée</span>
+                    </div>
+                    <p className="text-rose-800 dark:text-rose-300 leading-relaxed">
+                      Cette invitation a déjà été utilisée par une autre adresse e-mail.
+                    </p>
+                    <p className="font-mono text-[10px] bg-rose-100 dark:bg-rose-900/60 px-1.5 py-0.5 rounded text-rose-700 dark:text-rose-300 inline-block">
+                      Code : invitation/already-used
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => logout()}
+                    className="w-full py-3 rounded-2xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs shadow-md transition-colors flex items-center justify-center space-x-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Se déconnecter</span>
+                  </button>
+                </div>
+              ) : expectedEmail && !isEmailMatching ? (
+                /* Cas C : L'e-mail du compte Google connecté ne correspond pas à l'adresse attendue */
                 <div className="space-y-4">
                   <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 text-xs space-y-2">
                     <div className="flex items-center space-x-2 text-amber-900 dark:text-amber-200 font-extrabold">
@@ -226,6 +312,9 @@ export const ClassCreationJoinModal: React.FC = () => {
                         {currentGoogleEmail}
                       </span>
                     </p>
+                    <p className="font-mono text-[10px] bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded text-amber-800 dark:text-amber-200 inline-block">
+                      Code : invitation/wrong-email
+                    </p>
                   </div>
 
                   <button
@@ -238,7 +327,7 @@ export const ClassCreationJoinModal: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                /* SUCCÈS : L'e-mail correspond */
+                /* Cas D : Première adhésion valide, e-mail conforme */
                 <div className="space-y-4">
                   {currentUser?.email && (
                     <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-800 dark:text-emerald-300 flex items-center space-x-2">
@@ -251,13 +340,18 @@ export const ClassCreationJoinModal: React.FC = () => {
 
                   {feedback && (
                     <div
-                      className={`p-3 rounded-2xl text-xs ${
+                      className={`p-3 rounded-2xl text-xs space-y-1 ${
                         feedback.type === 'success'
                           ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                           : 'bg-rose-50 text-rose-800 border border-rose-200'
                       }`}
                     >
-                      {feedback.text}
+                      <p>{feedback.text}</p>
+                      {feedback.code && (
+                        <p className="font-mono text-[10px] bg-black/10 px-1.5 py-0.5 rounded inline-block">
+                          Code : {feedback.code}
+                        </p>
+                      )}
                     </div>
                   )}
 
@@ -376,13 +470,18 @@ export const ClassCreationJoinModal: React.FC = () => {
 
             {feedback && (
               <div
-                className={`p-3 rounded-2xl text-xs ${
+                className={`p-3 rounded-2xl text-xs space-y-1 ${
                   feedback.type === 'success'
                     ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                     : 'bg-rose-50 text-rose-800 border border-rose-200'
                 }`}
               >
-                {feedback.text}
+                <p>{feedback.text}</p>
+                {feedback.code && (
+                  <p className="font-mono text-[10px] bg-black/10 px-1.5 py-0.5 rounded inline-block">
+                    Code : {feedback.code}
+                  </p>
+                )}
               </div>
             )}
 

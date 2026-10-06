@@ -392,7 +392,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const joinClassWithInvite = async (token: string) => {
-    if (!currentUser) return { success: false, message: 'Veuillez vous connecter avec Google.' };
+    if (!currentUser) return { success: false, message: '[auth/unauthenticated] Veuillez vous connecter avec Google.' };
     try {
       const res = await firestoreService.joinClassWithInvitationToken(token, currentUser);
       setCurrentClass(res.classInfo);
@@ -401,7 +401,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await refreshData();
       return { success: true, message: `Félicitations ! Vous avez rejoint "${res.classInfo.name}" avec succès.` };
     } catch (err: any) {
-      return { success: false, message: err.message || 'Impossible de rejoindre la classe.' };
+      console.error('Erreur joinClassWithInvite:', err);
+      const code = err.code || err.message?.match(/\[(.*?)\]/)?.[1] || 'firestore/error';
+      const cleanMessage = err.message || 'Impossible de rejoindre la classe.';
+      const formatted = cleanMessage.includes('[') ? cleanMessage : `[${code}] ${cleanMessage}`;
+      return { success: false, message: formatted };
     }
   };
 

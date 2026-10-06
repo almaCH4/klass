@@ -8,7 +8,8 @@ import {
   deleteDoc,
   query,
   where,
-  writeBatch
+  writeBatch,
+  runTransaction
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { handleFirestoreError, OperationType } from '../utils/firestoreError';
@@ -103,6 +104,33 @@ export class FirestoreService {
       await updateDoc(doc(db, 'classes', classId), updates);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, path);
+    }
+  }
+
+  async getPronoteSettings(classId: string): Promise<{ icalUrl: string; updatedAt?: string; updatedBy?: string } | null> {
+    const path = `classes/${classId}/settings/pronote`;
+    try {
+      const snap = await getDoc(doc(db, 'classes', classId, 'settings', 'pronote'));
+      if (snap.exists()) {
+        return snap.data() as { icalUrl: string; updatedAt?: string; updatedBy?: string };
+      }
+      return null;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+      return null;
+    }
+  }
+
+  async savePronoteSettings(classId: string, icalUrl: string, userName: string): Promise<void> {
+    const path = `classes/${classId}/settings/pronote`;
+    try {
+      await setDoc(doc(db, 'classes', classId, 'settings', 'pronote'), {
+        icalUrl: icalUrl.trim(),
+        updatedAt: new Date().toISOString(),
+        updatedBy: userName
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, path);
     }
   }
 
@@ -222,33 +250,40 @@ export class FirestoreService {
       throw new Error('Code d\'invitation invalide.');
     }
 
-    const invRef = doc(db, 'classes', classId, 'invitations', invitationId);
-    const invSnap = await getDoc(invRef);
-    if (!invSnap.exists()) {
-      throw new Error('Invitation introuvable ou expirée.');
-    }
-
-    const invitation = invSnap.data() as ClassInvitation;
-    let className = invitation.className || '';
-
-    if (!className) {
-      try {
-        const classRef = doc(db, 'classes', classId);
-        const classSnap = await getDoc(classRef);
-        if (classSnap.exists()) {
-          className = classSnap.data().name || '';
-        }
-      } catch {
-        className = 'votre classe';
+    try {
+      const invRef = doc(db, 'classes', classId, 'invitations', invitationId);
+      const invSnap = await getDoc(invRef);
+      if (!invSnap.exists()) {
+        throw new Error('[invitation/not-found] Invitation introuvable ou expirée.');
       }
-    }
 
-    return {
-      invitation,
-      classId,
-      invitationId,
-      className: className || 'votre classe'
-    };
+      const invitation = invSnap.data() as ClassInvitation;
+      let className = invitation.className || '';
+
+      if (!className) {
+        try {
+          const classRef = doc(db, 'classes', classId);
+          const classSnap = await getDoc(classRef);
+          if (classSnap.exists()) {
+            className = classSnap.data().name || '';
+          }
+        } catch {
+          className = 'votre classe';
+        }
+      }
+
+      return {
+        invitation,
+        classId,
+        invitationId,
+        className: className || 'votre classe'
+      };
+    } catch (err: any) {
+      console.error('Erreur lecture invitation:', err);
+      const code = err.code || err.message?.match(/\[(.*?)\]/)?.[1] || 'firestore/error';
+      const cleanMessage = err.message || 'Impossible de charger l\'invitation.';
+      throw new Error(`[${code}] ${cleanMessage.replace(/\[.*?\]\s*/, '')}`);
+    }
   }
 
   async joinClassWithInvitationToken(rawToken: string, user: User): Promise<{ classInfo: ClassInfo; updatedUser: User }> {
@@ -276,75 +311,105 @@ export class FirestoreService {
     const invPath = `classes/${classId}/invitations/${invitationId}`;
     try {
       const invRef = doc(db, 'classes', classId, 'invitations', invitationId);
-      const invSnap = await getDoc(invRef);
-      if (!invSnap.exists()) {
-        throw new Error('Invitation introuvable ou expirée.');
-      }
+      const userRef = doc(db, 'users', user.id);
 
-      const invitation = invSnap.data() as ClassInvitation;
-      if (invitation.status === 'ACCEPTED') {
-        throw new Error('Cette invitation a déjà été utilisée.');
-      }
+      // Exécution dans une seule transaction Firestore atomique
+      const transactionResult = await runTransaction(db, async (transaction) => {
+        const invSnap = await transaction.get(invRef);
+        if (!invSnap.exists()) {
+          throw new Error('[invitation/not-found] Invitation introuvable ou expirée.');
+        }
 
-      if (invitation.status === 'REVOKED') {
-        throw new Error('Cette invitation a été révoquée.');
-      }
+        const invitation = invSnap.data() as ClassInvitation;
 
-      // Compare emails strictly in lowercase
-      if (invitation.email) {
-        const invEmail = invitation.email.trim().toLowerCase();
+        if (invitation.status === 'REVOKED') {
+          throw new Error('[invitation/revoked] Cette invitation a été révoquée par un délégué.');
+        }
+
+        const invEmail = (invitation.email || '').trim().toLowerCase();
         const userEmail = (user.email || '').trim().toLowerCase();
-        if (invEmail !== userEmail) {
+
+        // Si l'invitation a déjà été marquée comme utilisée
+        if (invitation.status === 'ACCEPTED' || (invitation as any).isUsed) {
+          const isSameUser = (invitation as any).usedBy === user.id || (invEmail && invEmail === userEmail);
+          if (isSameUser) {
+            // L'utilisateur est déjà membre ou a déjà utilisé cette invitation :
+            // On le fait simplement entrer dans la classe au lieu de lever une erreur
+            const targetRole: UserRole = invitation.roleTarget || 'STUDENT';
+            transaction.update(userRef, {
+              classId,
+              role: targetRole,
+              joinedWithInvitationId: invitationId
+            });
+            return {
+              targetRole,
+              alreadyAccepted: true
+            };
+          } else {
+            // Utilisée par une autre adresse e-mail
+            throw new Error(
+              '[invitation/already-used] Cette invitation a déjà été utilisée par une autre adresse e-mail.'
+            );
+          }
+        }
+
+        // Vérification de l'adresse e-mail pour la première adhésion
+        if (invEmail && invEmail !== userEmail) {
           throw new Error(
-            `Cette invitation est réservée à l'adresse e-mail ${invEmail}. Votre compte Google actuel est ${userEmail}.`
+            `[invitation/wrong-email] Cette invitation est réservée à l'adresse e-mail ${invEmail}. Votre compte Google actuel est ${userEmail}.`
           );
         }
-      }
 
-      // Update user role and classId
-      const targetRole: UserRole = invitation.roleTarget || 'STUDENT';
+        // Première adhésion : mise à jour atomique de l'invitation et du profil membre
+        const targetRole: UserRole = invitation.roleTarget || 'STUDENT';
+        transaction.update(invRef, {
+          status: 'ACCEPTED',
+          isUsed: true,
+          usedBy: user.id,
+          acceptedAt: new Date().toISOString()
+        });
+
+        transaction.update(userRef, {
+          classId,
+          role: targetRole,
+          joinedWithInvitationId: invitationId
+        });
+
+        return {
+          targetRole,
+          alreadyAccepted: false
+        };
+      });
+
       const updatedUser: User = {
         ...user,
         classId,
-        role: targetRole,
+        role: transactionResult.targetRole,
         joinedWithInvitationId: invitationId
       };
 
-      // Atomic batch: mark invitation used and set user classId with joinedWithInvitationId
-      const batch = writeBatch(db);
-      batch.update(invRef, {
-        status: 'ACCEPTED',
-        isUsed: true,
-        usedBy: user.id,
-        acceptedAt: new Date().toISOString()
-      });
-      batch.update(doc(db, 'users', user.id), {
-        classId,
-        role: targetRole,
-        joinedWithInvitationId: invitationId
-      });
-      await batch.commit();
-
       const classObj = await this.getClass(classId);
-      if (!classObj) throw new Error('Classe introuvable.');
+      if (!classObj) throw new Error('[class/not-found] Classe introuvable.');
 
-      // Add audit log
-      await this.addAuditLog(classId, {
-        id: 'log_' + Date.now(),
-        classId,
-        authorName: user.name,
-        authorRole: targetRole === 'DEPUTY' ? 'Suppléant(e)' : 'Élève',
-        action: 'Nouveau membre',
-        details: `${user.name} a rejoint la classe via une invitation`,
-        timestamp: 'Aujourd\'hui à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-      });
+      // Ajouter le log d'audit uniquement lors de la première adhésion
+      if (!transactionResult.alreadyAccepted) {
+        await this.addAuditLog(classId, {
+          id: 'log_' + Date.now(),
+          classId,
+          authorName: user.name,
+          authorRole: transactionResult.targetRole === 'DEPUTY' ? 'Suppléant(e)' : 'Élève',
+          action: 'Nouveau membre',
+          details: `${user.name} a rejoint la classe via une invitation`,
+          timestamp: 'Aujourd\'hui à ' + new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+        });
+      }
 
       return { classInfo: classObj, updatedUser };
     } catch (err: any) {
-      if (err.message && err.message.includes('permission')) {
-        handleFirestoreError(err, OperationType.WRITE, invPath);
-      }
-      throw err;
+      console.error('Erreur adhésion classe transaction:', err);
+      const code = err.code || err.message?.match(/\[(.*?)\]/)?.[1] || 'firestore/error';
+      const cleanMessage = err.message || 'Impossible de rejoindre la classe.';
+      throw new Error(`[${code}] ${cleanMessage.replace(/\[.*?\]\s*/, '')}`);
     }
   }
 
